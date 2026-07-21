@@ -59,6 +59,9 @@ export function getPlanetMaxLandElev() {
   return m;
 }
 
+// ── Regional base elevation for one regional cell ──
+// worldX, worldY are in regional-cell units across the whole planet
+function computeRegionalBaseCell(worldX, worldY, seed) {
   // Fractional planetary coordinate
   const px = worldX / CELLS_PER_PLANETARY;
   const py = worldY / CELLS_PER_PLANETARY;
