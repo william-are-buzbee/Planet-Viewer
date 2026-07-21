@@ -25,8 +25,12 @@ import {
   CHUNK_W, CHUNK_H
 } from './tile-gen.js';
 
-// ── Store defaults for reset ──
-const defaultParams = { ...state.params };
+// ── Store defaults for reset (initialized lazily to avoid circular-import TDZ) ──
+let defaultParams = null;
+function getDefaultParams() {
+  if (!defaultParams) defaultParams = { ...state.params };
+  return defaultParams;
+}
 
 const paramConfig = {};
 
@@ -385,7 +389,7 @@ function buildTuningPanel() {
   const resetBtn = document.createElement('button');
   resetBtn.textContent = '⌫ Reset defaults';
   resetBtn.addEventListener('click', () => {
-    for (const key in defaultParams) state.params[key] = defaultParams[key];
+    for (const key in getDefaultParams()) state.params[key] = getDefaultParams()[key];
     activePreset = 'Default';
     buildTuningPanel();
     showToast('Reset to defaults');
@@ -396,7 +400,7 @@ function buildTuningPanel() {
 }
 
 function applyPreset(name) {
-  for (const key in defaultParams) state.params[key] = defaultParams[key];
+  for (const key in getDefaultParams()) state.params[key] = getDefaultParams()[key];
   const preset = tuningPresets[name];
   for (const key in preset) state.params[key] = preset[key];
   activePreset = name;
