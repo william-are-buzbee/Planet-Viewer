@@ -468,34 +468,6 @@ function generateRegionalDetailLowRes(centerX, centerY) {
 
 // ── Bilinear sample of a high-res typed array at fractional (fx, fy) ──
 //    fx wraps in longitude (0..HR_W), fy clamps in latitude (0..HR_H-1).
-function bilinearSampleHR(array, fx, fy) {
-  const x0 = Math.floor(fx);
-  const y0 = Math.floor(fy);
-  const dx = fx - x0;
-  const dy = fy - y0;
-
-  const cx0 = ((x0 % state.HR_W) + state.HR_W) % state.HR_W;
-  const cx1 = ((x0 + 1) % state.HR_W + state.HR_W) % state.HR_W;
-  const cy0 = Math.max(0, Math.min(state.HR_H - 1, y0));
-  const cy1 = Math.max(0, Math.min(state.HR_H - 1, y0 + 1));
-
-  const v00 = array[cy0 * state.HR_W + cx0];
-  const v10 = array[cy0 * state.HR_W + cx1];
-  const v01 = array[cy1 * state.HR_W + cx0];
-  const v11 = array[cy1 * state.HR_W + cx1];
-
-  const vx0 = v00 + (v10 - v00) * dx;
-  const vx1 = v01 + (v11 - v01) * dx;
-  return vx0 + (vx1 - vx0) * dy;
-}
-
-// ── Nearest-neighbor sample of a high-res typed array (for enum/int fields) ──
-function nearestSampleHR(array, fx, fy) {
-  const nx = ((Math.round(fx) % state.HR_W) + state.HR_W) % state.HR_W;
-  const ny = Math.max(0, Math.min(state.HR_H - 1, Math.round(fy)));
-  return array[ny * state.HR_W + nx];
-}
-
 // ── Regional detail generation (HIGH-RES path) ──
 //    Reads the BASE physical state from the already-computed high-res grid,
 //    then refines it with regional-scale coastline noise and higher-resolution
