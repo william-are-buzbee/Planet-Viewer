@@ -1342,7 +1342,9 @@ function computeStandingWater(elevGrid) {
       const cell = state.regionalCells[rx][ry];
       // R3-FIX3: precipitation gate on standing water
       // Channels in dry regions (precip < 0.10) don't carry permanent surface water.
-      if (cell.isLand && cell.streamOrder >= 3 && cell.saturation > 0.85 && cell.precipitation > 0.10) {
+      // R5-FIX: per-cell WTD gate — skip channel cells whose own water table
+      // is too deep to support standing water, even if stream order qualifies.
+      if (cell.isLand && cell.streamOrder >= 3 && cell.saturation > 0.85 && cell.precipitation > 0.10 && cell.waterTableDepth <= 0.12) {
         hasWater[ry * S + rx] = 1;
         wDepth[ry * S + rx] = 0.02 + cell.drainageDensity * 0.05;
       }
@@ -1412,6 +1414,13 @@ function computeStandingWater(elevGrid) {
 
       for (let b = 0; b < basin.length; b++) {
         const bi = basin[b];
+        // R5-FIX: per-cell WTD gate — only mark cells as water if their own
+        // WTD supports ponding. Basin center qualified, but individual cells
+        // on ridges (high WTD) shouldn't be flooded — water stays in the
+        // actual depression. Threshold 0.12 (slightly above the center gate
+        // of 0.10) allows a small margin for noise near the depression center.
+        const bx = bi % S, by = (bi / S) | 0;
+        if (state.regionalCells[bx][by].waterTableDepth > 0.12) continue;
         hasWater[bi] = 1;
         wDepth[bi] = Math.max(0.005, fillLevel - elevGrid[bi]);
       }
