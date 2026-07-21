@@ -776,9 +776,56 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       const hrCopper   = bilinearSampleHR(state.hiResData.copper, hx, hy, state.HR_W, state.HR_H);
       const hrManganese= bilinearSampleHR(state.hiResData.manganese, hx, hy, state.HR_W, state.HR_H);
 
-      // Flora type: nearest-neighbor (discrete field, don't interpolate).
-      const ftInt = nearestSampleHR(state.hiResData.floraType, hx, hy, state.HR_W, state.HR_H);
-      const hrFloraType = HR_FLORA_NAMES[ftInt] || 'barren';
+      // R2-FIX1: probabilistic flora type sampling
+      // Instead of nearest-neighbor (which produces 128×128 blocks of uniform
+      // flora type), sample the four surrounding hi-res cells and pick the type
+      // with the highest bilinear weight, perturbed by noise for organic boundaries.
+      let hrFloraType;
+      {
+        const x0 = Math.floor(hx), x1 = x0 + 1;
+        const y0 = Math.floor(hy), y1 = y0 + 1;
+        const fx = hx - x0;
+        const fy = hy - y0;
+
+        // Sample flora type at each corner
+        const t00 = nearestSampleHR(state.hiResData.floraType, x0, y0, state.HR_W, state.HR_H);
+        const t10 = nearestSampleHR(state.hiResData.floraType, x1, y0, state.HR_W, state.HR_H);
+        const t01 = nearestSampleHR(state.hiResData.floraType, x0, y1, state.HR_W, state.HR_H);
+        const t11 = nearestSampleHR(state.hiResData.floraType, x1, y1, state.HR_W, state.HR_H);
+
+        // Fast path: all four corners agree — no noise needed
+        if (t00 === t10 && t10 === t01 && t01 === t11) {
+          hrFloraType = HR_FLORA_NAMES[t00] || 'barren';
+        } else {
+          // Boundary path: accumulate bilinear weights per type
+          const typeWeights = new Map();
+          const corners = [
+            { type: t00, w: (1 - fx) * (1 - fy) },
+            { type: t10, w: fx * (1 - fy) },
+            { type: t01, w: (1 - fx) * fy },
+            { type: t11, w: fx * fy },
+          ];
+          for (const c of corners) {
+            typeWeights.set(c.type, (typeWeights.get(c.type) || 0) + c.w);
+          }
+
+          // Add noise perturbation for organic boundaries
+          let bestType = t00, bestWeight = -Infinity;
+          for (const [type, weight] of typeWeights) {
+            const perturbation = noise2D(
+              worldX * 0.06 + type * 137.3,
+              worldY * 0.06 + type * 251.7,
+              0xBEEF
+            ) * 0.18;
+            const adjusted = weight + perturbation;
+            if (adjusted > bestWeight) {
+              bestWeight = adjusted;
+              bestType = type;
+            }
+          }
+          hrFloraType = HR_FLORA_NAMES[bestType] || 'barren';
+        }
+      }
 
       // Fields the high-res grid doesn't carry stay sampled from the low-res
       // grid so the non-high-res overlays (moisture, temperature, currents,
@@ -848,37 +895,13 @@ function generateRegionalDetailHiRes(centerX, centerY) {
   // Pass 3: drainage (higher-resolution flow accumulation than the high-res grid)
   computeRegionalDrainage(elevGrid);
 
-  // ── Pass 3b: inherit hi-res stream order as floor ──
-  // The hi-res grid computed flow accumulation globally (stepHR5_drainage).
-  // The regional flow accumulation is window-bounded and misses upstream
-  // contributions from outside the view. Use the hi-res stream order as a
-  // minimum — the regional computation can only increase it, not decrease it.
-  if (state.hiResData && state.hiResData.streamOrder) {
-    // Minimum drainageDensity values corresponding to each stream order
-    // threshold, so downstream consumers (saturation, grain) see consistent
-    // values for globally-established channels.
-    const MIN_DENSITY = [0, 0.30, 0.55, 0.80];
-    //                  so=0  so=1   so=2   so=3
-
-    for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-      for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-        const cell = state.regionalCells[rx][ry];
-        if (!cell.isLand) continue;
-
-        const hx = (cell.worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-        const hy = (cell.worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-        const hrSO = nearestSampleHR(state.hiResData.streamOrder, hx, hy, state.HR_W, state.HR_H);
-
-        if (hrSO > cell.streamOrder) {
-          cell.streamOrder = hrSO;
-        }
-        const minDensity = MIN_DENSITY[Math.min(cell.streamOrder, 3)];
-        if (cell.drainageDensity < minDensity) {
-          cell.drainageDensity = minDensity;
-        }
-      }
-    }
-  }
+  // R2-FIX2: removed hi-res stream order inheritance (former Pass 3b).
+  // The regional D8 flow accumulation (computeRegionalDrainage) already
+  // computes stream order from the bilinear-interpolated + noise-enhanced
+  // elevation grid, which encodes the same drainage patterns the hi-res
+  // global computation detected. Inheriting the hi-res stream order via
+  // nearestSampleHR produced 128×128 blocks of uniform stream order,
+  // causing discontinuous WTD/saturation/color steps at grid boundaries.
 
   // Pass 4: refine substrate / saturation / water table from the high-res base.
   //         Ridge cells keep high-res values; channels get wetter and finer.
@@ -1010,35 +1033,10 @@ function refineRegionalFloraFromHiRes(cell) {
   // hi-res does not), causing photo/chemo disagreements in transition zones.
 
   if (state.hiResData) {
-    // Nearest-neighbor sample of the hi-res flora type
-    const hx = (cell.worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-    const hy = (cell.worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-    const hrFloraInt = nearestSampleHR(state.hiResData.floraType, hx, hy, state.HR_W, state.HR_H);
-    cell.floraType = HR_FLORA_NAMES[hrFloraInt] || 'barren';
-
-    // Break up blocky hi-res grid boundaries with noise.
-    // At 4× hi-res multiplier each hi-res cell maps to ~128 regional cells,
-    // producing 128-cell blocks of uniform flora type. Sample neighbors to
-    // detect boundaries and use noise to create organic, ragged transitions.
-    const hiResStep = 1.0; // one hi-res cell
-    const neighborTypes = [
-      nearestSampleHR(state.hiResData.floraType, hx + hiResStep, hy, state.HR_W, state.HR_H),
-      nearestSampleHR(state.hiResData.floraType, hx - hiResStep, hy, state.HR_W, state.HR_H),
-      nearestSampleHR(state.hiResData.floraType, hx, hy + hiResStep, state.HR_W, state.HR_H),
-      nearestSampleHR(state.hiResData.floraType, hx, hy - hiResStep, state.HR_W, state.HR_H),
-    ];
-    const isBoundary = neighborTypes.some(nt => nt !== hrFloraInt);
-    if (isBoundary) {
-      // Use world-coordinate noise to perturb the boundary
-      const boundaryNoise = noise2D(cell.worldX * 0.12, cell.worldY * 0.12, 0xF1A7);
-      if (boundaryNoise > 0.15) {
-        // Pick the most common neighbor type that differs
-        const altType = neighborTypes.find(nt => nt !== hrFloraInt);
-        if (altType !== undefined) {
-          cell.floraType = HR_FLORA_NAMES[altType] || cell.floraType;
-        }
-      }
-    }
+    // R2-FIX1: flora type already determined during Pass 1c via weighted
+    // probabilistic sampling from the four surrounding hi-res cells.
+    // No re-sampling or boundary jitter needed here.
+    cell.floraType = cell._hrFloraType;
   } else {
     // LowRes fallback: no hi-res grid available, use fitness competition.
     // This path is less critical since low-res mode doesn't show the
