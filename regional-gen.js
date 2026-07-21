@@ -16,6 +16,8 @@ export const PLANETARY_CELL_KM = 78.0;     // each planetary cell ≈ 78 km acro
 export const REGIONAL_CELL_KM = PLANETARY_CELL_KM / REGIONAL_SIZE; // ≈ 0.15 km/cell
 export const CELLS_PER_PLANETARY = REGIONAL_SIZE; // regional cells spanning one planetary cell edge
 
+const HR_FLORA_NAMES = ['barren', 'photosynthetic', 'chemotrophic', 'mixotrophic'];
+
 // ── Sample a planetary cell with wrapping / clamping ──
 export function getPlanetaryCell(x, y) {
   const wx = ((Math.round(x) % W) + W) % W;
