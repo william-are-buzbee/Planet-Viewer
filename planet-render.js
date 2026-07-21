@@ -908,7 +908,7 @@ function drawSelectionMarker() {
 export {
   render, renderGlobe, renderMollweide,
   drawSelectionMarker, drawStreamlines,
-  overlays, overlayFunctions,
+  overlays,
   mollweideProject, mollweidePixelToCell, globePixelToCell, globeCellToPixel,
   getColorFn
 };
