@@ -997,71 +997,49 @@ function refineRegionalFloraFromHiRes(cell) {
     return;
   }
 
-  // ── Re-derive flora type from continuous properties ──
-  // Instead of inheriting cell._hrFloraType (a categorical value from the hi-res
-  // grid that's identical across 128×128 regional cells), re-run the flora type
-  // fitness competition using this cell's own mineral and water values.
-  //
-  // Domain warp: displace the mineral sampling coordinates with noise so the
-  // classification boundary follows an organic contour instead of the bilinear
-  // interpolation grid lines.
+  // FIX 1: flora type inheritance — inherit from hi-res grid instead of
+  // re-deriving. Re-derivation disagrees with the hi-res pipeline due to
+  // mineral sampling differences (regional domain-warps the coordinates,
+  // hi-res does not), causing photo/chemo disagreements in transition zones.
 
   if (state.hiResData) {
+    // Nearest-neighbor sample of the hi-res flora type
     const hx = (cell.worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
     const hy = (cell.worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
+    const hrFloraInt = nearestSampleHR(state.hiResData.floraType, hx, hy, state.HR_W, state.HR_H);
+    cell.floraType = HR_FLORA_NAMES[hrFloraInt] || 'barren';
 
-    // Domain warp (matches stepHR6_floraRow warp seeds and parameters)
-    const warpScale = 0.08;
-    const warpAmp = 1.8;
-    const warpSeed1 = 0x7A3C;
-    const warpSeed2 = 0x9E1F;
-    const wx = hx + noise2D(hx * warpScale, hy * warpScale, warpSeed1) * warpAmp;
-    const wy = hy + noise2D(hx * warpScale, hy * warpScale, warpSeed2) * warpAmp;
-
-    // Sample minerals and water from warped coordinates
-    const ironW = bilinearSampleHR(state.hiResData.iron, wx, wy, state.HR_W, state.HR_H);
-    const copperW = bilinearSampleHR(state.hiResData.copper, wx, wy, state.HR_W, state.HR_H);
-    const mnW = bilinearSampleHR(state.hiResData.manganese, wx, wy, state.HR_W, state.HR_H);
-    const mineralTotalW = ironW + copperW + mnW;
-    const precipW = bilinearSampleHR(state.hiResData.precipitation, wx, wy, state.HR_W, state.HR_H);
-    const gwW = bilinearSampleHR(state.hiResData.groundwater, wx, wy, state.HR_W, state.HR_H);
-    const volcW = bilinearSampleHR(state.hiResData.volcanism, wx, wy, state.HR_W, state.HR_H);
-
-    // Flora type fitness competition (mirrors stepHR6_floraRow logic)
-    const regWaterW = Math.min(1, precipW * 3.0 + gwW * 1.5);
-    const photoFit = regWaterW * 0.8;
-    const chemoFit = mineralTotalW * Math.max(regWaterW, volcW * 1.5) * 1.2;
-    const mixoFit = (0.6 + 0.5 * mineralTotalW) * regWaterW;
-
-    if (chemoFit > photoFit && chemoFit > mixoFit && chemoFit > 0.02) {
-      cell.floraType = 'chemotrophic';
-    } else if (mixoFit > photoFit && mixoFit > chemoFit && mixoFit > 0.02) {
-      cell.floraType = 'mixotrophic';
-    } else if (photoFit > 0.02) {
-      cell.floraType = 'photosynthetic';
-    } else {
-      cell.floraType = 'barren';
+    // Break up blocky hi-res grid boundaries with noise.
+    // At 4× hi-res multiplier each hi-res cell maps to ~128 regional cells,
+    // producing 128-cell blocks of uniform flora type. Sample neighbors to
+    // detect boundaries and use noise to create organic, ragged transitions.
+    const hiResStep = 1.0; // one hi-res cell
+    const neighborTypes = [
+      nearestSampleHR(state.hiResData.floraType, hx + hiResStep, hy, state.HR_W, state.HR_H),
+      nearestSampleHR(state.hiResData.floraType, hx - hiResStep, hy, state.HR_W, state.HR_H),
+      nearestSampleHR(state.hiResData.floraType, hx, hy + hiResStep, state.HR_W, state.HR_H),
+      nearestSampleHR(state.hiResData.floraType, hx, hy - hiResStep, state.HR_W, state.HR_H),
+    ];
+    const isBoundary = neighborTypes.some(nt => nt !== hrFloraInt);
+    if (isBoundary) {
+      // Use world-coordinate noise to perturb the boundary
+      const boundaryNoise = noise2D(cell.worldX * 0.12, cell.worldY * 0.12, 0xF1A7);
+      if (boundaryNoise > 0.15) {
+        // Pick the most common neighbor type that differs
+        const altType = neighborTypes.find(nt => nt !== hrFloraInt);
+        if (altType !== undefined) {
+          cell.floraType = HR_FLORA_NAMES[altType] || cell.floraType;
+        }
+      }
     }
   } else {
-    // LowRes fallback: use the cell's stored (interpolated) minerals directly
-    const mineralTotal = cell.mineralTotal;
-    const precip = cell.precipitation;
-    const gw = cell.groundwater;
-    const volc = cell.volcanism || 0;
-    const regWater = Math.min(1, precip * 3.0 + gw * 1.5);
-    const photoFit = regWater * 0.8;
-    const chemoFit = mineralTotal * Math.max(regWater, volc * 1.5) * 1.2;
-    const mixoFit = (0.6 + 0.5 * mineralTotal) * regWater;
-
-    if (chemoFit > photoFit && chemoFit > mixoFit && chemoFit > 0.02) {
-      cell.floraType = 'chemotrophic';
-    } else if (mixoFit > photoFit && mixoFit > chemoFit && mixoFit > 0.02) {
-      cell.floraType = 'mixotrophic';
-    } else if (photoFit > 0.02) {
-      cell.floraType = 'photosynthetic';
-    } else {
-      cell.floraType = 'barren';
-    }
+    // LowRes fallback: no hi-res grid available, use fitness competition.
+    // This path is less critical since low-res mode doesn't show the
+    // globe/regional disagreement.
+    computeRegionalFloraCell(cell);
+    // computeRegionalFloraCell sets canopy/groundCover/etc. too — return
+    // early to avoid overwriting those downstream values.
+    return;
   }
 
   // ── From here, flora type is already set per cell above ──
@@ -1110,7 +1088,9 @@ function refineRegionalFloraFromHiRes(cell) {
   if (hasWaterLocal) gc = 0.3;
   else if (grain > 0.8) gc = 0.08;
   else {
-    const waterFactor = clamp(precip * 3.0 + gw * 2.0, 0, 1);
+    // FIX 2: canopy sensitivity — reduced multipliers (was 3.0/2.0) to preserve
+    // gradient across the planet's actual precipitation range
+    const waterFactor = clamp(precip * 1.5 + gw * 1.0, 0, 1);
     gc = (0.5 + (1.0 - grain) * 0.4) * waterFactor;
   }
   cell.groundCover = gc;
@@ -1118,7 +1098,9 @@ function refineRegionalFloraFromHiRes(cell) {
   // Canopy (mirrors stepHR6)
   let cd = 0;
   if (!hasWaterLocal && grain <= 0.7) {
-    const waterFactor = Math.min(1, precip * 3.0 + gw * 1.5);
+    // FIX 2: canopy sensitivity — reduced multipliers (was 3.0/1.5) to preserve
+    // gradient across the planet's actual precipitation range
+    const waterFactor = Math.min(1, precip * 1.5 + gw * 0.8);
     let satFactor;
     if (sat > 0.95) satFactor = 0.15;
     else if (sat > 0.85) satFactor = 0.35;
@@ -1356,6 +1338,13 @@ function computeStandingWater(elevGrid) {
       // Check center cell has reasonable saturation
       const centerCell = state.regionalCells[rx][ry];
       if (centerCell.saturation < 0.4) continue;
+
+      // FIX 3: WTD gate for basins — don't fill basins where the water table
+      // is well below the surface (no water source to fill the depression).
+      // Basins in wet lowlands (WTD ≈ 0 or negative) still fill; basins on
+      // dry ridges (WTD > 0.10) are skipped. Ponding only occurs where the
+      // water table is within 10cm of the surface.
+      if (centerCell.waterTableDepth > 0.10) continue;
 
       for (let b = 0; b < basin.length; b++) {
         const bi = basin[b];
