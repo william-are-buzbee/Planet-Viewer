@@ -793,37 +793,84 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         const t01 = nearestSampleHR(state.hiResData.floraType, x0, y1, state.HR_W, state.HR_H);
         const t11 = nearestSampleHR(state.hiResData.floraType, x1, y1, state.HR_W, state.HR_H);
 
-        // Fast path: all four corners agree — no noise needed
-        if (t00 === t10 && t10 === t01 && t01 === t11) {
-          hrFloraType = HR_FLORA_NAMES[t00] || 'barren';
-        } else {
-          // Boundary path: accumulate bilinear weights per type
-          const typeWeights = new Map();
-          const corners = [
-            { type: t00, w: (1 - fx) * (1 - fy) },
-            { type: t10, w: fx * (1 - fy) },
-            { type: t01, w: (1 - fx) * fy },
-            { type: t11, w: fx * fy },
-          ];
-          for (const c of corners) {
-            typeWeights.set(c.type, (typeWeights.get(c.type) || 0) + c.w);
-          }
+        // R3-FIX1: ocean filter on flora sampling
+        // Sample elevation at each corner to identify ocean cells.
+        // Ocean corners (elevation <= 0) have their bilinear weight zeroed out
+        // so barren flora doesn't leak from ocean onto land cells.
+        const HR_W = state.HR_W, HR_H = state.HR_H;
+        const cx0 = ((x0 % HR_W) + HR_W) % HR_W;
+        const cx1 = ((x1 % HR_W) + HR_W) % HR_W;
+        const cy0 = Math.max(0, Math.min(HR_H - 1, y0));
+        const cy1 = Math.max(0, Math.min(HR_H - 1, y1));
+        const e00 = state.hiResData.elevation[cy0 * HR_W + cx0];
+        const e10 = state.hiResData.elevation[cy0 * HR_W + cx1];
+        const e01 = state.hiResData.elevation[cy1 * HR_W + cx0];
+        const e11 = state.hiResData.elevation[cy1 * HR_W + cx1];
 
-          // Add noise perturbation for organic boundaries
-          let bestType = t00, bestWeight = -Infinity;
-          for (const [type, weight] of typeWeights) {
-            const perturbation = noise2D(
-              worldX * 0.06 + type * 137.3,
-              worldY * 0.06 + type * 251.7,
-              0xBEEF
-            ) * 0.18;
-            const adjusted = weight + perturbation;
-            if (adjusted > bestWeight) {
-              bestWeight = adjusted;
-              bestType = type;
-            }
+        const isOcean00 = e00 <= 0;
+        const isOcean10 = e10 <= 0;
+        const isOcean01 = e01 <= 0;
+        const isOcean11 = e11 <= 0;
+
+        if (isOcean00 && isOcean10 && isOcean01 && isOcean11) {
+          // All four corners are ocean — cell is fully ocean
+          hrFloraType = 'barren';
+        } else {
+          // Compute bilinear weights, zeroing ocean corners
+          let w00 = isOcean00 ? 0 : (1 - fx) * (1 - fy);
+          let w10 = isOcean10 ? 0 : fx * (1 - fy);
+          let w01 = isOcean01 ? 0 : (1 - fx) * fy;
+          let w11 = isOcean11 ? 0 : fx * fy;
+
+          // Renormalize weights so they sum to 1.0
+          const wSum = w00 + w10 + w01 + w11;
+          if (wSum > 0) {
+            w00 /= wSum; w10 /= wSum; w01 /= wSum; w11 /= wSum;
           }
-          hrFloraType = HR_FLORA_NAMES[bestType] || 'barren';
+          // End R3-FIX1
+
+          // Fast path: all four land corners agree — no noise needed
+          // (only check non-ocean corners for agreement)
+          const landTypes = [];
+          if (!isOcean00) landTypes.push(t00);
+          if (!isOcean10) landTypes.push(t10);
+          if (!isOcean01) landTypes.push(t01);
+          if (!isOcean11) landTypes.push(t11);
+          const allAgree = landTypes.length > 0 && landTypes.every(t => t === landTypes[0]);
+
+          if (allAgree) {
+            hrFloraType = HR_FLORA_NAMES[landTypes[0]] || 'barren';
+          } else {
+            // Boundary path: accumulate weights per type (ocean corners already zeroed)
+            const typeWeights = new Map();
+            const corners = [
+              { type: t00, w: w00 },
+              { type: t10, w: w10 },
+              { type: t01, w: w01 },
+              { type: t11, w: w11 },
+            ];
+            for (const c of corners) {
+              if (c.w > 0) {
+                typeWeights.set(c.type, (typeWeights.get(c.type) || 0) + c.w);
+              }
+            }
+
+            // Add noise perturbation for organic boundaries
+            let bestType = landTypes[0] || t00, bestWeight = -Infinity;
+            for (const [type, weight] of typeWeights) {
+              const perturbation = noise2D(
+                worldX * 0.06 + type * 137.3,
+                worldY * 0.06 + type * 251.7,
+                0xBEEF
+              ) * 0.18;
+              const adjusted = weight + perturbation;
+              if (adjusted > bestWeight) {
+                bestWeight = adjusted;
+                bestType = type;
+              }
+            }
+            hrFloraType = HR_FLORA_NAMES[bestType] || 'barren';
+          }
         }
       }
 
@@ -1048,6 +1095,17 @@ function refineRegionalFloraFromHiRes(cell) {
   }
 
   // ── From here, flora type is already set per cell above ──
+
+  // R3-FIX2: barren gates canopy
+  // Barren cells have no living cover — skip all canopy/groundCover computation
+  if (cell.floraType === 'barren') {
+    cell.groundCover = 0;
+    cell.canopy = 0;
+    cell.chemoCrust = 0;
+    cell.organicContent = 0;
+    cell.floraDensity = 0;
+    return;
+  }
 
   if (cell.hasWater) {
     // Water prevents rooted canopy but NOT ground-level biology.
@@ -1282,7 +1340,9 @@ function computeStandingWater(elevGrid) {
   for (let ry = 0; ry < S; ry++) {
     for (let rx = 0; rx < S; rx++) {
       const cell = state.regionalCells[rx][ry];
-      if (cell.isLand && cell.streamOrder >= 3 && cell.saturation > 0.85) {
+      // R3-FIX3: precipitation gate on standing water
+      // Channels in dry regions (precip < 0.10) don't carry permanent surface water.
+      if (cell.isLand && cell.streamOrder >= 3 && cell.saturation > 0.85 && cell.precipitation > 0.10) {
         hasWater[ry * S + rx] = 1;
         wDepth[ry * S + rx] = 0.02 + cell.drainageDensity * 0.05;
       }
@@ -1344,6 +1404,11 @@ function computeStandingWater(elevGrid) {
       // dry ridges (WTD > 0.10) are skipped. Ponding only occurs where the
       // water table is within 10cm of the surface.
       if (centerCell.waterTableDepth > 0.10) continue;
+
+      // R3-FIX3: precipitation gate on standing water
+      // Don't fill basins without sufficient water supply.
+      // On dry slopes (precip < 0.15), no basins form regardless of topographic shape.
+      if (centerCell.precipitation < 0.15) continue;
 
       for (let b = 0; b < basin.length; b++) {
         const bi = basin[b];
@@ -1495,6 +1560,16 @@ function computeRegionalFloraCell(cell) {
   // Ground cover vs canopy split
   cell.canopy = clamp(cell.floraDensity * (cell.floraType === 'photosynthetic' ? 1.0 : 0.6), 0, 1);
   cell.groundCover = clamp(cell.floraDensity * 0.8 + cell.saturation * 0.2, 0, 1);
+
+  // R3-FIX2: barren gates canopy
+  // Barren cells have no living cover (safety net — the early return above
+  // should catch most cases, but this guards against edge cases)
+  if (cell.floraType === 'barren') {
+    cell.groundCover = 0;
+    cell.canopy = 0;
+    cell.chemoCrust = 0;
+    cell.organicContent = 0;
+  }
 }
 
 // ── Regional terrain derivation — thin wrapper over deriveTerrainAndCover ──
