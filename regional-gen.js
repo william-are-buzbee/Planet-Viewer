@@ -6,7 +6,7 @@ import { state } from './main.js';
 import {
   W, H, TOTAL, mulberry32, hashInt, noise2D, noise3D, fractalNoise,
   fractalNoise3D, clamp, wrapX, spherePos,
-  bilinearSampleHR, nearestSampleHR, getLatitudeBand
+  bilinearSampleHR, nearestSampleHR, getLatitudeBand, maxKey
 } from './core-math.js';
 import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
