@@ -5,17 +5,11 @@
 import { state } from './main.js';
 import {
   W, H, TOTAL, mulberry32, hashInt, noise2D, noise3D, fractalNoise,
-  fractalNoise3D, clamp, wrapX, spherePos,
+  fractalNoise3D, clamp, smoothstep, wrapX, spherePos,
   bilinearSampleHR, nearestSampleHR, getLatitudeBand, maxKey
 } from './core-math.js';
 import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
-
-// R1-FIX1: smooth saturation factor helper (module-level, used by refineRegionalFloraFromHiRes)
-function smoothstep(edge0, edge1, x) {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
 
 export const REGIONAL_SIZE = 512;          // regional grid is 512×512 cells
 export const PLANETARY_CELL_KM = 78.0;     // each planetary cell ≈ 78 km across
@@ -454,21 +448,28 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
-  // Pass 4: substrate, saturation, standing water
+  // Pass 4: substrate, saturation
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
       const cell = state.regionalCells[rx][ry];
       computeRegionalSubstrate(cell, regionSeed);
     }
   }
-  computeStandingWater(elevGrid);
 
-  // Pass 5: flora + terrain type
+  // Pass 5a: flora (sets canopy, groundCover — "dry" values before flood modulation)
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      const cell = state.regionalCells[rx][ry];
-      computeRegionalFloraCell(cell);
-      deriveRegionalTerrainType(cell);
+      computeRegionalFloraCell(state.regionalCells[rx][ry]);
+    }
+  }
+
+  // Pass 5b: derive water state from WTD (replaces computeStandingWater)
+  deriveWTDWater(state.regionalCells, REGIONAL_SIZE, REGIONAL_SIZE);
+
+  // Pass 5c: terrain type derivation
+  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
+    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
+      deriveRegionalTerrainType(state.regionalCells[rx][ry]);
     }
   }
 
@@ -957,15 +958,26 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       refineRegionalSubstrateFromHiRes(state.regionalCells[rx][ry]);
     }
   }
-  computeStandingWater(elevGrid);
 
-  // Pass 5: refine flora from the (possibly drainage-modified) state, then
-  //         derive terrain type through the canonical function.
+  // Pass 5a: refine flora from the (possibly drainage-modified) state.
+  //          Sets canopy, groundCover — these are the "dry" values before
+  //          flood modulation. Must run before deriveWTDWater.
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      const cell = state.regionalCells[rx][ry];
-      refineRegionalFloraFromHiRes(cell);
-      deriveRegionalTerrainType(cell);
+      refineRegionalFloraFromHiRes(state.regionalCells[rx][ry]);
+    }
+  }
+
+  // Pass 5b: derive water state from WTD (replaces computeStandingWater).
+  //          Reads WTD (set in Pass 4) and canopy (set in Pass 5a).
+  //          Modulates canopy downward for flooded zones.
+  deriveWTDWater(state.regionalCells, REGIONAL_SIZE, REGIONAL_SIZE);
+
+  // Pass 5c: derive terrain type through the canonical function.
+  //          Reads the flood-modulated canopy to determine coverType.
+  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
+    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
+      deriveRegionalTerrainType(state.regionalCells[rx][ry]);
     }
   }
 
@@ -1295,220 +1307,89 @@ function computeRegionalSubstrate(cell, seed) {
   cell.waterTableDepth = clamp((1 - cell.saturation) * (0.3 + cell.baseElevation * 2), 0, 1);
 }
 
-// ── Standing water: fill local basins along major streams ──
-function computeStandingWater(elevGrid) {
-  const S = REGIONAL_SIZE;
-  const N = S * S;
-  const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-  const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
+// ── Derive water state from water table depth ──
+// Replaces computeStandingWater. Instead of detecting topographic basins and
+// filling them (which produced concentric ring artifacts), this reads
+// waterTableDepth directly — channels have negative WTD (water table above
+// surface), ridges have positive WTD (water table below surface).
+//
+// Must be called AFTER both substrate refinement (sets WTD) and flora
+// refinement (sets canopy, groundCover) but BEFORE terrain type derivation
+// (reads the flood-modulated canopy to determine coverType).
+function deriveWTDWater(cells, gridW, gridH) {
+  for (let ry = 0; ry < gridH; ry++) {
+    for (let rx = 0; rx < gridW; rx++) {
+      const cell = cells[rx][ry];
 
-  // Minimum feature sizes — tightened for the wet planet (precip 1.00 everywhere).
-  // Previous values were tuned for a nearly-dry planet and flooded too many cells.
-  const REG_MIN_BASIN_AREA  = 20;    // was 12 — lake must span ≥20 cells
-  const REG_MIN_BASIN_DEPTH = 0.04;  // was 0.02 — depression must be ≥4 cm deep
-  const REG_MIN_WATER_FEAT  = 15;    // was 8  — connected water component ≥15 cells
-  const REG_POUR_TOLERANCE  = 0.005; // was 0.008 — shallower fill level
-  const REG_SHORE_DIST      = 2;     // unchanged
-
-  // Reset all cells
-  for (let ry = 0; ry < S; ry++) {
-    for (let rx = 0; rx < S; rx++) {
-      const cell = state.regionalCells[rx][ry];
-      cell.hasWater = false;
-      cell.waterDepth = 0;
-    }
-  }
-
-  // Flat arrays for BFS processing (indexed ry * S + rx)
-  const hasWater   = new Uint8Array(N);
-  const wDepth     = new Float32Array(N);
-
-  // ── Ocean tiles ──
-  for (let ry = 0; ry < S; ry++) {
-    for (let rx = 0; rx < S; rx++) {
-      const cell = state.regionalCells[rx][ry];
+      // ── Ocean cells: keep existing water handling, set consistent fields ──
       if (!cell.isLand) {
-        hasWater[ry * S + rx] = 1;
-        wDepth[ry * S + rx] = -cell.baseElevation;
-      }
-    }
-  }
-
-  // ── Channel water: stream order >= 3 at regional scale (each cell ~1km) ──
-  // At regional scale, only major rivers (SO 3+) are visible.
-  // SO 2 channels are ~10-50m wide — a small fraction of a 1 km cell.
-  for (let ry = 0; ry < S; ry++) {
-    for (let rx = 0; rx < S; rx++) {
-      const cell = state.regionalCells[rx][ry];
-      // R3-FIX3: precipitation gate on standing water
-      // Channels in dry regions (precip < 0.10) don't carry permanent surface water.
-      // R5-FIX: per-cell WTD gate — skip channel cells whose own water table
-      // is too deep to support standing water, even if stream order qualifies.
-      if (cell.isLand && cell.streamOrder >= 3 && cell.saturation > 0.85 && cell.precipitation > 0.10 && cell.waterTableDepth <= 0.12) {
-        hasWater[ry * S + rx] = 1;
-        wDepth[ry * S + rx] = 0.02 + cell.drainageDensity * 0.05;
-      }
-    }
-  }
-
-  // ── Basin detection and filling ──
-  const visited = new Uint8Array(N);
-  for (let ry = 0; ry < S; ry++) {
-    for (let rx = 0; rx < S; rx++) {
-      const i = ry * S + rx;
-      if (elevGrid[i] <= 0 || hasWater[i] || visited[i]) continue;
-
-      // Check local minimum
-      const e = elevGrid[i];
-      let isMin = true;
-      for (let d = 0; d < 8; d++) {
-        const nx = rx + dx8[d], ny = ry + dy8[d];
-        if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue;
-        if (elevGrid[ny * S + nx] <= e) { isMin = false; break; }
-      }
-      if (!isMin) continue;
-
-      // BFS flood-fill basin
-      const fillLevel = e + REG_POUR_TOLERANCE;
-      const queue = [i];
-      const basin = [i];
-      visited[i] = 1;
-      let maxDepth = 0;
-      let head = 0;
-      while (head < queue.length) {
-        const ci = queue[head++];
-        const cx = ci % S, cy = (ci / S) | 0;
-        const depth = fillLevel - elevGrid[ci];
-        if (depth > maxDepth) maxDepth = depth;
-        for (let d = 0; d < 8; d++) {
-          const nx = cx + dx8[d], ny = cy + dy8[d];
-          if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue;
-          const ni = ny * S + nx;
-          if (visited[ni] || elevGrid[ni] <= 0 || hasWater[ni]) continue;
-          if (elevGrid[ni] < fillLevel) {
-            visited[ni] = 1;
-            queue.push(ni);
-            basin.push(ni);
-          }
-        }
+        cell.waterDepth = Math.max(0, -cell.baseElevation);
+        cell.hasWater = true;
+        cell.pelaRaft = 0;
+        cell.kolmRelict = 0;
+        cell.wetness = 1.0;
+        cell.baseCanopy = cell.canopy || 0;
+        continue;
       }
 
-      // Filter
-      if (basin.length < REG_MIN_BASIN_AREA) continue;
-      if (maxDepth < REG_MIN_BASIN_DEPTH) continue;
-      // Check center cell has reasonable saturation
-      const centerCell = state.regionalCells[rx][ry];
-      if (centerCell.saturation < 0.4) continue;
+      // ── Land cells: derive water state from WTD ──
+      const wtd = cell.waterTableDepth;
 
-      // FIX 3: WTD gate for basins — don't fill basins where the water table
-      // is well below the surface (no water source to fill the depression).
-      // Basins in wet lowlands (WTD ≈ 0 or negative) still fill; basins on
-      // dry ridges (WTD > 0.10) are skipped. Ponding only occurs where the
-      // water table is within 10cm of the surface.
-      if (centerCell.waterTableDepth > 0.10) continue;
+      // 1. Derive water depth directly from WTD
+      cell.waterDepth = Math.max(0, -wtd);
 
-      // R3-FIX3: precipitation gate on standing water
-      // Don't fill basins without sufficient water supply.
-      // On dry slopes (precip < 0.15), no basins form regardless of topographic shape.
-      if (centerCell.precipitation < 0.15) continue;
+      // 2. Standing water flag for terrain derivation
+      //    0.02m minimum filters noise-floor artifacts.
+      //    The existing SHALLOW_WATER_TERRAIN_THRESHOLD (0.05m) in
+      //    deriveTerrainAndCover handles terrain type classification —
+      //    cells with depth 0.02–0.05m keep their ground terrain type.
+      cell.hasWater = cell.waterDepth > 0.02;
 
-      for (let b = 0; b < basin.length; b++) {
-        const bi = basin[b];
-        // R5-FIX: per-cell WTD gate — only mark cells as water if their own
-        // WTD supports ponding. Basin center qualified, but individual cells
-        // on ridges (high WTD) shouldn't be flooded — water stays in the
-        // actual depression. Threshold 0.12 (slightly above the center gate
-        // of 0.10) allows a small margin for noise near the depression center.
-        const bx = bi % S, by = (bi / S) | 0;
-        if (state.regionalCells[bx][by].waterTableDepth > 0.12) continue;
-        hasWater[bi] = 1;
-        wDepth[bi] = Math.max(0.005, fillLevel - elevGrid[bi]);
+      // 3. Continuous wetness parameter (blending factor for palette)
+      //    0 at WTD ≥ 0.05 (dry), 1 at WTD ≤ -0.05 (flooded)
+      cell.wetness = 1.0 - smoothstep(-0.05, 0.05, wtd);
+
+      // 4. Save base canopy BEFORE flood modulation
+      //    Needed for kolm relict calculation
+      cell.baseCanopy = cell.canopy || 0;
+
+      // 5. Flood-kill modulation on living canopy
+      //    Kolm tolerates flooding at the base (stele is waterproof ceramic)
+      //    but mineral supply through the water column fails at depth ~5cm.
+      //    Living canopy declines from WTD -0.05 to -0.20, reaching zero.
+      if (wtd < -0.05) {
+        cell.canopy = (cell.canopy || 0) * smoothstep(-0.20, -0.05, wtd);
       }
-    }
-  }
 
-  // ── Connected component filtering ──
-  const ccLabel = new Int32Array(N);
-  ccLabel.fill(-1);
-  let nextCC = 0;
-  const ccSizes = [];
-
-  for (let i = 0; i < N; i++) {
-    if (!hasWater[i] || ccLabel[i] >= 0) continue;
-    const label = nextCC++;
-    const ccQueue = [i];
-    ccLabel[i] = label;
-    let size = 0;
-    let hasOcean = false;
-    let ch = 0;
-    while (ch < ccQueue.length) {
-      const ci = ccQueue[ch++];
-      size++;
-      if (elevGrid[ci] <= 0) hasOcean = true;
-      const cx = ci % S, cy = (ci / S) | 0;
-      for (let d = 0; d < 8; d++) {
-        const nx = cx + dx8[d], ny = cy + dy8[d];
-        if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue;
-        const ni = ny * S + nx;
-        if (hasWater[ni] && ccLabel[ni] < 0) {
-          ccLabel[ni] = label;
-          ccQueue.push(ni);
-        }
+      // 6. Pela raft coverage (floating photosynthetic mat on water surface)
+      //    Only for photosynthetic or mixotrophic flora types.
+      //    Peaks at depth ~4–10cm, declines in deeper water (wave action,
+      //    reduced substrate mineral input), gone by 30cm.
+      //    Scales with ground cover — more pela on land = more raft material.
+      const ft = cell.floraType;
+      const isPelaCapable = (ft === 'photosynthetic' || ft === 1 ||
+                             ft === 'mixotrophic'    || ft === 3);
+      if (cell.waterDepth > 0 && isPelaCapable) {
+        const depth = cell.waterDepth;
+        const onset   = smoothstep(0.0, 0.04, depth);
+        const decline = 1.0 - smoothstep(0.10, 0.30, depth);
+        cell.pelaRaft = onset * decline * 0.75 * Math.min(1.0, (cell.groundCover || 0) * 1.5);
+      } else {
+        cell.pelaRaft = 0;
       }
-    }
-    ccSizes[label] = { size, hasOcean };
-  }
 
-  // Demote small land-only components
-  for (let i = 0; i < N; i++) {
-    if (!hasWater[i]) continue;
-    const lab = ccLabel[i];
-    if (lab >= 0 && !ccSizes[lab].hasOcean && ccSizes[lab].size < REG_MIN_WATER_FEAT) {
-      hasWater[i] = 0;
-      wDepth[i] = 0;
-    }
-  }
-
-  // ── Shoreline saturation boost ──
-  const dist = new Uint8Array(N);
-  dist.fill(255);
-  const shoreQueue = [];
-  for (let i = 0; i < N; i++) {
-    if (hasWater[i] && elevGrid[i] > 0) {
-      dist[i] = 0;
-      shoreQueue.push(i);
-    }
-  }
-  let sHead = 0;
-  while (sHead < shoreQueue.length) {
-    const ci = shoreQueue[sHead++];
-    const cd = dist[ci];
-    if (cd >= REG_SHORE_DIST) continue;
-    const cx = ci % S, cy = (ci / S) | 0;
-    for (let d = 0; d < 8; d++) {
-      const nx = cx + dx8[d], ny = cy + dy8[d];
-      if (nx < 0 || nx >= S || ny < 0 || ny >= S) continue;
-      const ni = ny * S + nx;
-      const nd = cd + 1;
-      if (nd < dist[ni] && !hasWater[ni] && elevGrid[ni] > 0) {
-        dist[ni] = nd;
-        shoreQueue.push(ni);
-      }
-    }
-  }
-
-  // ── Write back to state.regionalCells ──
-  for (let ry = 0; ry < S; ry++) {
-    for (let rx = 0; rx < S; rx++) {
-      const i = ry * S + rx;
-      const cell = state.regionalCells[rx][ry];
-      cell.hasWater = !!hasWater[i];
-      cell.waterDepth = wDepth[i];
-
-      // Shoreline saturation boost for nearby land cells
-      if (!hasWater[i] && dist[i] < 255 && dist[i] > 0) {
-        const boost = Math.max(0, 0.12 - dist[i] * 0.05);
-        cell.saturation = clamp((cell.saturation || 0) + boost, 0, 1);
+      // 7. Kolm relict density (dead mineral-ceramic steles still standing)
+      //    Kolm steles don't rot — they're mineral-ceramic. They erode
+      //    geologically over decades. Relicts appear as living kolm dies
+      //    (WTD < -0.05), persist through deep flooding, eventually
+      //    erode away at WTD < -0.50.
+      //    Density proportional to what canopy WOULD be here without flooding.
+      if (wtd < -0.05) {
+        const appear = 1.0 - smoothstep(-0.15, -0.05, wtd);
+        const erode  = smoothstep(-0.50, -0.30, wtd);
+        cell.kolmRelict = cell.baseCanopy * 0.8 * appear * erode;
+      } else {
+        cell.kolmRelict = 0;
       }
     }
   }

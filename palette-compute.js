@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════════════════════════
 
 import { clamp } from './core-math.js';
-import { SHALLOW_WATER_TERRAIN_THRESHOLD, intToTerrainType, intToCoverType } from './terrain-derive.js';
+import { intToTerrainType, intToCoverType } from './terrain-derive.js';
 
 const MAT = {
   photoLiving:    { r: 165, g: 28, b: 28 },
@@ -115,6 +115,9 @@ function computeTilePalette(p) {
   const tt = p.terrainType;
   const ct = p.coverType;
   const ft = p.floraType || 'barren';
+  const wetness = p.wetness || 0;
+  const pelaRaft = p.pelaRaft || 0;
+  const kolmRelict = p.kolmRelict || 0;
 
   // Select the living ground cover color based on flora type
   // Photosynthetic: crimson mat
@@ -262,19 +265,6 @@ function computeTilePalette(p) {
     bgL1 = { r: 100, g: 90, b: 75 };  // Fallback
   }
 
-  // ── Wet film modifier for shallow standing water ──
-  // Tiles with very shallow water (< 5cm) keep their ground terrain type
-  // but get darkened with a slight blue shift — the water film effect.
-  if (depth > 0 && depth < SHALLOW_WATER_TERRAIN_THRESHOLD && tt !== 'water' && tt !== 2 && tt !== 'deep_water' && tt !== 1) {
-    const wetIntensity = depth / SHALLOW_WATER_TERRAIN_THRESHOLD; // 0 at no water, 1 at threshold
-    const wetDarken = 1.0 - wetIntensity * 0.18; // up to 18% darker
-    bgL1 = {
-      r: Math.round(bgL1.r * wetDarken),
-      g: Math.round(bgL1.g * wetDarken),
-      b: Math.round(Math.min(255, bgL1.b * wetDarken + wetIntensity * 6)) // slight blue shift
-    };
-  }
-
   // ── FOREGROUND (Layer 1) ──
   if (tt === 'water' || tt === 2) {
     // Shallow water: mat highlights show through alongside sky reflection
@@ -326,44 +316,117 @@ function computeTilePalette(p) {
     fgL1 = { r: Math.min(255, bgL1.r + 30), g: Math.min(255, bgL1.g + 25), b: Math.min(255, bgL1.b + 20) };
   }
 
-  // ── COVER MODIFICATION (forest / mushforest canopy) ──
-  if (ct === 'forest' || ct === 1) {
-    const shadeAmount = cd * 0.65;  // dense canopy blocks up to 65% of light
-    bgL1 = darken(bgL1, 1 - shadeAmount);
-    bgL1 = blend(bgL1, darken(livingCoverColor, 0.4), 1 - cd * 0.3, cd * 0.3);
+  // ── Continuous wetness modifier ──
+  // Replaces the old binary wet film. Wetness grades smoothly from 0 (dry,
+  // WTD ≥ 0.05) to 1 (flooded, WTD ≤ -0.05). Applies to ground terrain
+  // types only — water/deep_water have their own palette.
+  if (wetness > 0 && tt !== 'water' && tt !== 2 && tt !== 'deep_water' && tt !== 1) {
+    const w = wetness;
+    // Darken bg with slight blue shift (same visual character as old wet film,
+    // but continuous instead of binary)
+    bgL1 = {
+      r: Math.round(bgL1.r * (1 - 0.18 * w)),
+      g: Math.round(bgL1.g * (1 - 0.18 * w)),
+      b: Math.round(Math.min(255, bgL1.b * (1 - 0.18 * w) + 6 * w))
+    };
+    // Reduce fg intensity (water fills micro-gaps, reducing surface detail)
+    fgL1 = {
+      r: Math.round(fgL1.r + (bgL1.r - fgL1.r) * 0.3 * w),
+      g: Math.round(fgL1.g + (bgL1.g - fgL1.g) * 0.3 * w),
+      b: Math.round(fgL1.b + (bgL1.b - fgL1.b) * 0.3 * w)
+    };
+  }
 
-    fgL1 = blend(livingCoverBright, livingCoverColor, 0.6, 0.4);
-    if (cd < 0.5) {
-      const groundFg = fgL1;
-      fgL1 = blend(groundFg, livingCoverBright, 1 - cd, cd);
+  // ── CONTINUOUS CANOPY SHADE ──
+  // Decoupled from coverType — reads canopyDensity directly.
+  // No threshold, no cliff. Forest edge becomes a gradient.
+  // coverType still exists for sprite selection and gameplay systems.
+  if (cd > 0.01) {
+    const shade = cd * 0.75;
+    bgL1 = darken(bgL1, 1 - shade);
+
+    // Living cover color overlay under canopy, gated on canopyDensity > 0.05
+    if (cd > 0.05) {
+      if (isChemo) {
+        // Chemotrophic canopy: mineral-tinted overlay
+        const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
+        bgL1 = blend(bgL1, darken(chemoColor, 0.5), 1 - cd * 0.3, cd * 0.3);
+        // fg: chemo highlight, blended by canopy density
+        const chemoHighlight = {
+          r: Math.min(255, chemoColor.r + 35),
+          g: Math.min(255, chemoColor.g + 25),
+          b: Math.min(255, chemoColor.b + 30)
+        };
+        fgL1 = blend(fgL1, chemoHighlight, 1 - cd, cd);
+      } else {
+        // Photosynthetic / mixotrophic canopy: crimson overlay
+        bgL1 = blend(bgL1, darken(livingCoverColor, 0.4), 1 - cd * 0.3, cd * 0.3);
+        // fg: canopy bright highlights, blended by canopy density
+        fgL1 = blend(fgL1, livingCoverBright, 1 - cd, cd);
+      }
+    }
+  }
+
+  // ── PELA RAFT BLENDING (on WATER terrain) ──
+  // Floating photosynthetic mat on water surface. Blends crimson pela coverage
+  // onto water, replacing the hard snap from land (crimson) to water (amber/blue)
+  // with a continuous gradient.
+  if ((tt === 'water' || tt === 2) && pelaRaft > 0) {
+    const r = pelaRaft;  // 0 to ~0.75
+
+    // Blend water bg toward livingCoverColor based on pela raft coverage
+    bgL1 = {
+      r: Math.round(bgL1.r + (livingCoverColor.r - bgL1.r) * r * 0.7),
+      g: Math.round(bgL1.g + (livingCoverColor.g - bgL1.g) * r * 0.7),
+      b: Math.round(bgL1.b + (livingCoverColor.b - bgL1.b) * r * 0.7)
+    };
+
+    // At high pela coverage, fg shifts toward livingCoverColor too
+    if (r > 0.4) {
+      const fgBlend = (r - 0.4) / 0.6;  // 0 at r=0.4, ~0.58 at r=0.75
+      fgL1 = {
+        r: Math.round(fgL1.r + (livingCoverColor.r - fgL1.r) * fgBlend * 0.4),
+        g: Math.round(fgL1.g + (livingCoverColor.g - fgL1.g) * fgBlend * 0.4),
+        b: Math.round(fgL1.b + (livingCoverColor.b - fgL1.b) * fgBlend * 0.4)
+      };
+    }
+  }
+
+  // ── KOLM RELICT CONTRIBUTION (on WATER / DEEP_WATER terrain) ──
+  // Dead mineral-ceramic steles standing in water. No shade (no fronds),
+  // just visual structure as mid-tone accents.
+  if ((tt === 'water' || tt === 2 || tt === 'deep_water' || tt === 1) && kolmRelict > 0) {
+    // Structural wood color from local mineral chemistry
+    // Iron → rust, copper → verdigris, manganese → near-black
+    const totalMin = iron + copper + mn;
+    let relictColor;
+    if (totalMin < 0.05) {
+      // Depleted minerals — neutral wood
+      relictColor = { r: 100, g: 80, b: 65 };
+    } else {
+      const fi = iron / totalMin, fc = copper / totalMin, fm = mn / totalMin;
+      // Wood L1 base colors weighted by mineral concentration
+      relictColor = {
+        r: Math.round(fi * 138 + fc * 74 + fm * 58),
+        g: Math.round(fi * 74 + fc * 136 + fm * 40),
+        b: Math.round(fi * 48 + fc * 104 + fm * 48)
+      };
     }
 
-  } else if (ct === 'sparse_forest' || ct === 3) {
-    const shadeAmount = cd * 0.4;
-    bgL1 = darken(bgL1, 1 - shadeAmount);
-    bgL1 = blend(bgL1, darken(livingCoverColor, 0.5), 1 - cd * 0.15, cd * 0.15);
-
-    fgL1 = blend(fgL1, livingCoverBright, 0.5, 0.5);
-
-  } else if (ct === 'mushforest' || ct === 2) {
-    const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
-    const shadeAmount = cd * 0.55;
-    bgL1 = darken(bgL1, 1 - shadeAmount);
-    bgL1 = blend(bgL1, darken(chemoColor, 0.5), 1 - cd * 0.35, cd * 0.35);
-
-    fgL1 = { r: Math.min(255, chemoColor.r + 35), g: Math.min(255, chemoColor.g + 25), b: Math.min(255, chemoColor.b + 30) };
-
-  } else if (ct === 'sparse_mushforest' || ct === 4) {
-    const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
-    const shadeAmount = cd * 0.3;
-    bgL1 = darken(bgL1, 1 - shadeAmount);
-    bgL1 = blend(bgL1, darken(chemoColor, 0.6), 1 - cd * 0.2, cd * 0.2);
-
-    fgL1 = blend(fgL1, chemoColor, 0.5, 0.5);
+    // Relicts are sparse vertical elements, not area cover — subtle contribution
+    const k = kolmRelict * 0.3;
+    // Pre-compute mid from current bg/fg, then blend relict color into it
+    const preMid = blend(bgL1, fgL1, 0.65, 0.35);
+    midL1 = {
+      r: Math.round(preMid.r + (relictColor.r - preMid.r) * k),
+      g: Math.round(preMid.g + (relictColor.g - preMid.g) * k),
+      b: Math.round(preMid.b + (relictColor.b - preMid.b) * k)
+    };
   }
 
   // ── MID-TONE (Layer 1) ──
-  midL1 = blend(bgL1, fgL1, 0.65, 0.35);
+  // If kolm relict already computed a custom mid, keep it; otherwise standard blend.
+  if (!midL1) midL1 = blend(bgL1, fgL1, 0.65, 0.35);
 
   // ── APPLY LAYERS 2+3 (star + adaptation) ──
   const bg = toScreen(bgL1.r, bgL1.g, bgL1.b);
@@ -390,6 +453,9 @@ function tilePhysical(t, i) {
     chemoCrust:     t.chemoCrust[i] || 0,
     waterDepth:     t.waterDepth[i] || 0,
     floraType:      ['barren','photosynthetic','chemotrophic','mixotrophic'][t.floraType[i]] || 'barren',
+    wetness:        (t.wetness && t.wetness[i]) || 0,
+    pelaRaft:       (t.pelaRaft && t.pelaRaft[i]) || 0,
+    kolmRelict:     (t.kolmRelict && t.kolmRelict[i]) || 0,
   };
 }
 
@@ -410,6 +476,9 @@ function regionalPhysical(cell) {
     chemoCrust:     cell.chemoCrust || 0,
     waterDepth:     cell.waterDepth || 0,
     floraType:      cell.floraType || 'barren',
+    wetness:        cell.wetness || 0,        // 0 (dry) to 1 (flooded)
+    pelaRaft:       cell.pelaRaft || 0,       // 0 to ~0.75 (pela raft coverage on water)
+    kolmRelict:     cell.kolmRelict || 0,     // 0 to ~0.6 (dead stele density)
   };
 }
 

@@ -140,6 +140,14 @@ export function sphereNoise(pos, seed, octaves, scale) {
 // ── Utilities ──
 export function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+// ── Smooth Hermite interpolation (GLSL smoothstep) ──
+// Returns 0 when x ≤ edge0, 1 when x ≥ edge1, smooth S-curve between.
+// Requires edge0 < edge1.
+export function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 export function wrappedDistSq(x1, y1, x2, y2) {
   let dx = Math.abs(x1 - x2);
   if (dx > W / 2) dx = W - dx;
