@@ -104,8 +104,6 @@ const tileZoneParams = {
   tidal:       { channelSpacing: 150, channelDepth: 0.003, anisotropy: 0.50, ridgeAmp: 0.008 },
 };
 
-state.currentTileData = null;
-state.tileChunkCache = new Map();
 
 
 // ── T1: Sample regional context (3×3 bilinear interpolation) ──
