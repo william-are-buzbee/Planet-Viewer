@@ -420,7 +420,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
   computeRegionalDrainage(elevGrid);
 
   // ── Pass 3b: inherit planetary stream order as floor (LowRes path) ──
-  if (planet && planet.streamOrder) {
+  if (state.planet && state.planet.streamOrder) {
     const MIN_DENSITY = [0, 0.30, 0.55, 0.80];
 
     for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
@@ -432,7 +432,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
         const py = cell.worldY / CELLS_PER_PLANETARY;
         // Nearest-neighbor from the planetary grid
         const gi = (Math.round(py) % H) * W + ((Math.round(px) % W) + W) % W;
-        const hrSO = planet.streamOrder[gi] || 0;
+        const hrSO = state.planet.streamOrder[gi] || 0;
 
         if (hrSO > cell.streamOrder) {
           cell.streamOrder = hrSO;

@@ -537,7 +537,7 @@ function step1b_generateGeoSeeds(seed, rng) {
   }
 
   // Build spatial grids for fast lookup
-  geoSeeds = {
+  state.geoSeeds = {
     mountains: mountainSeeds,
     arcs: arcSeeds,
     rifts: riftSeeds,
@@ -639,7 +639,7 @@ function step2_computeElevation(seed, rng) {
       }
 
       // Mountain seeds (collision zones) — elliptical + angular noise falloff
-      const nearbyMtns = queryNearbySeeds(geoSeeds.mountainGrid, x, y, MAX_MTN_RADIUS);
+      const nearbyMtns = queryNearbySeeds(state.geoSeeds.mountainGrid, x, y, MAX_MTN_RADIUS);
       for (const { seed: mtn } of nearbyMtns) {
         const r = mtn.radius;
         const dist = computeEffectiveDist(pos, mtn);
@@ -652,7 +652,7 @@ function step2_computeElevation(seed, rng) {
       }
 
       // Volcanic arc seeds (subduction zones) — elliptical + angular noise falloff
-      const nearbyArcs = queryNearbySeeds(geoSeeds.arcGrid, x, y, MAX_ARC_RADIUS);
+      const nearbyArcs = queryNearbySeeds(state.geoSeeds.arcGrid, x, y, MAX_ARC_RADIUS);
       for (const { seed: arc } of nearbyArcs) {
         const r = arc.radius;
         const dist = computeEffectiveDist(pos, arc);
@@ -665,7 +665,7 @@ function step2_computeElevation(seed, rng) {
       }
 
       // Rift seeds (continental rift zones) — depressions, unchanged radial falloff
-      const nearbyRifts = queryNearbySeeds(geoSeeds.riftGrid, x, y, MAX_RIFT_RADIUS);
+      const nearbyRifts = queryNearbySeeds(state.geoSeeds.riftGrid, x, y, MAX_RIFT_RADIUS);
       for (const { seed: rift, dist } of nearbyRifts) {
         const r = rift.radius;
         if (dist < r) {
@@ -677,7 +677,7 @@ function step2_computeElevation(seed, rng) {
       }
 
       // Hotspot modifier — unchanged radial falloff (hotspots are roughly radial)
-      for (const hs of hotspots) {
+      for (const hs of state.hotspots) {
         const hsDist = dist3D(pos, spherePos[hs.x][hs.y]);
         if (hsDist < HOTSPOT_RADIUS) {
           elevation += hs.intensity * 0.35 * Math.max(0, 1 - hsDist / HOTSPOT_RADIUS);
@@ -719,7 +719,7 @@ function step3_computeMinerals(seed, rng) {
     const c = state.cells[i];
     let volcanism = 0;
 
-    const nearbyMtns = queryNearbySeeds(geoSeeds.mountainGrid, c.x, c.y, MAX_MTN_RADIUS);
+    const nearbyMtns = queryNearbySeeds(state.geoSeeds.mountainGrid, c.x, c.y, MAX_MTN_RADIUS);
     for (const { seed: mtn, dist } of nearbyMtns) {
       const r = mtn.radius;
       if (dist < r) {
@@ -728,7 +728,7 @@ function step3_computeMinerals(seed, rng) {
       }
     }
 
-    const nearbyArcs = queryNearbySeeds(geoSeeds.arcGrid, c.x, c.y, MAX_ARC_RADIUS);
+    const nearbyArcs = queryNearbySeeds(state.geoSeeds.arcGrid, c.x, c.y, MAX_ARC_RADIUS);
     for (const { seed: arc, dist } of nearbyArcs) {
       const r = arc.radius;
       if (dist < r) {
@@ -737,7 +737,7 @@ function step3_computeMinerals(seed, rng) {
       }
     }
 
-    for (const hs of hotspots) {
+    for (const hs of state.hotspots) {
       const hsDist = dist3D(spherePos[c.x][c.y], spherePos[hs.x][hs.y]);
       if (hsDist < HOTSPOT_VOLC_RADIUS) volcanism += hs.intensity * Math.max(0, 1 - hsDist / HOTSPOT_VOLC_RADIUS);
     }
@@ -749,7 +749,7 @@ function step3_computeMinerals(seed, rng) {
     c.minerals.copper += volcanism * 0.35;
     c.minerals.manganese += volcanism * 0.3;
 
-    for (const hs of hotspots) {
+    for (const hs of state.hotspots) {
       const hsDist = dist3D(spherePos[c.x][c.y], spherePos[hs.x][hs.y]);
       if (hsDist < HOTSPOT_CENTER_RADIUS) {
         const centerBoost = (1 - hsDist / HOTSPOT_CENTER_RADIUS) * 0.4;
@@ -1535,8 +1535,8 @@ function printWeatherDiagnostic() {
     );
   }
 
-  const landCells = cells.filter(c => c.isLand);
-  const oceanCells = cells.filter(c => !c.isLand);
+  const landCells = state.cells.filter(c => c.isLand);
+  const oceanCells = state.cells.filter(c => !c.isLand);
 
   const stat = (arr, fn) => {
     if (!arr.length) return { min: 0, max: 0, mean: 0 };
@@ -1579,7 +1579,7 @@ function printWeatherDiagnostic() {
   }
 
   let nanCount = { precip: 0, gw: 0, wa: 0, windU: 0, sst: 0 };
-  for (const c of cells) {
+  for (const c of state.cells) {
     if (isNaN(c.precipitation) || c.precipitation === undefined) nanCount.precip++;
     if (isNaN(c.groundwater) || c.groundwater === undefined) nanCount.gw++;
     if (isNaN(c.waterAvailability) || c.waterAvailability === undefined) nanCount.wa++;
