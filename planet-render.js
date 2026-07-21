@@ -193,7 +193,7 @@ const overlays = {
     return { r: 200, g: 185, b: 160 };
   },
 
-  state.plates(gi) {
+  plates(gi) {
     const n = (state.plates && state.plates.length) ? state.plates.length : 1;
     const hue = (state.planet.plateId[gi] / n) * 360;
     // No plateType at surface res; approximate continental/oceanic by land mask.
