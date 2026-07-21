@@ -910,5 +910,5 @@ export {
   drawSelectionMarker, drawStreamlines,
   overlays, overlayFunctions,
   mollweideProject, mollweidePixelToCell, globePixelToCell, globeCellToPixel,
-  mineralChannel, getColorFn
+  getColorFn
 };
