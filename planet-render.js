@@ -439,7 +439,7 @@ function render(overlay) {
 }
 
 function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
-  if (!cells) return;
+  if (!state.cells) return;
   const scaleX = canvasW / W;
   const scaleY = canvasH / H;
 
