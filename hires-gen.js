@@ -142,7 +142,7 @@ function stepHR3_substrateRow(hy, seed) {
     const eL = state.hiResData.elevation[hy * state.HR_W + ((hx - 1 + state.HR_W) % state.HR_W)];
     const eR = state.hiResData.elevation[hy * state.HR_W + ((hx + 1) % state.HR_W)];
     const eU = hy > 0        ? state.hiResData.elevation[(hy - 1) * state.HR_W + hx] : state.hiResData.elevation[hi];
-    const eD = hy < HR_H - 1 ? state.hiResData.elevation[(hy + 1) * state.HR_W + hx] : state.hiResData.elevation[hi];
+    const eD = hy < state.HR_H - 1 ? state.hiResData.elevation[(hy + 1) * state.HR_W + hx] : state.hiResData.elevation[hi];
     const gradX = (eR - eL) * 0.5, gradY = (eD - eU) * 0.5;
     const slope = Math.sqrt(gradX * gradX + gradY * gradY);
 
@@ -161,7 +161,7 @@ function stepHR3_substrateRow(hy, seed) {
       for (let d = 0; d < 4; d++) {
         const nx = (hx + dx4[d] + state.HR_W) % state.HR_W;
         const ny = hy + dy4[d];
-        if (ny >= 0 && ny < HR_H && !state.hiResData.isLand[ny * state.HR_W + nx]) { hasOcean = true; break; }
+        if (ny >= 0 && ny < state.HR_H && !state.hiResData.isLand[ny * state.HR_W + nx]) { hasOcean = true; break; }
       }
       grain = hasOcean ? (grain * 0.4 + 0.5 * 0.6) : (grain * 0.4 + 0.3 * 0.6);
     }
