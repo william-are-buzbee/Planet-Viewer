@@ -11,6 +11,12 @@ import {
 import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
 
+// R1-FIX1: smooth saturation factor helper (module-level, used by refineRegionalFloraFromHiRes)
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 export const REGIONAL_SIZE = 512;          // regional grid is 512×512 cells
 export const PLANETARY_CELL_KM = 78.0;     // each planetary cell ≈ 78 km across
 export const REGIONAL_CELL_KM = PLANETARY_CELL_KM / REGIONAL_SIZE; // ≈ 0.15 km/cell
@@ -382,6 +388,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
         drainage: bilinearInterpolate(px, py, c => c.drainage),
         windSpeed: bilinearInterpolate(px, py, c => c.windSpeed),
         sst: bilinearInterpolate(px, py, c => c.sst),
+        volcanism: bilinearInterpolate(px, py, c => c.volcanism || 0), // R1-FIX3: needed for unified chemoFitness
         minerals: {
           iron: bilinearInterpolate(px, py, c => c.minerals.iron),
           copper: bilinearInterpolate(px, py, c => c.minerals.copper),
@@ -1088,9 +1095,7 @@ function refineRegionalFloraFromHiRes(cell) {
   if (hasWaterLocal) gc = 0.3;
   else if (grain > 0.8) gc = 0.08;
   else {
-    // FIX 2: canopy sensitivity — reduced multipliers (was 3.0/2.0) to preserve
-    // gradient across the planet's actual precipitation range
-    const waterFactor = clamp(precip * 1.5 + gw * 1.0, 0, 1);
+    const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
     gc = (0.5 + (1.0 - grain) * 0.4) * waterFactor;
   }
   cell.groundCover = gc;
@@ -1098,15 +1103,11 @@ function refineRegionalFloraFromHiRes(cell) {
   // Canopy (mirrors stepHR6)
   let cd = 0;
   if (!hasWaterLocal && grain <= 0.7) {
-    // FIX 2: canopy sensitivity — reduced multipliers (was 3.0/1.5) to preserve
-    // gradient across the planet's actual precipitation range
-    const waterFactor = Math.min(1, precip * 1.5 + gw * 0.8);
-    let satFactor;
-    if (sat > 0.95) satFactor = 0.15;
-    else if (sat > 0.85) satFactor = 0.35;
-    else if (sat > 0.5) satFactor = 0.80;
-    else if (sat > 0.3) satFactor = 1.0;
-    else satFactor = 0.45;
+    const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
+    // R1-FIX1: smooth saturation factor
+    const wetPenalty = smoothstep(0.4, 1.0, sat);
+    const dryPenalty = 1.0 - smoothstep(0.05, 0.35, sat);
+    const satFactor = Math.max(0.25, 1.0 - 0.65 * wetPenalty - 0.55 * dryPenalty);
     const subFactor = grain < 0.5 ? 1.0 : Math.max(0, 1.0 - (grain - 0.5) * 3.0);
     cd = waterFactor * satFactor * subFactor;
     if (waterFactor > 0.05 && subFactor > 0.1) cd = Math.max(cd, 0.12);
@@ -1465,11 +1466,11 @@ function computeRegionalFloraCell(cell) {
     }
     // Flora type: compute from fitness as normal (don't skip to 'none')
     const water = Math.max(cell.saturation, cell.waterAvailability);
-    const photoFitness = water * 0.85 * (0.5 + 0.5 * (1 - cell.baseElevation));
-    const chemoFitness = cell.mineralTotal * Math.max(water, cell.groundwater * 1.4) * 1.2;
-    if (chemoFitness > photoFitness && chemoFitness > 0.05) {
+    const photoFitness = water * 0.8; // R1-FIX4A: removed elevation penalty, coefficient 0.8 matches planetary/hi-res
+    const chemoFitness = cell.mineralTotal * Math.max(water, (cell.volcanism || 0) * 1.5) * 1.2; // R1-FIX3: volcanism, not groundwater
+    if (chemoFitness > photoFitness && chemoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
         cell.floraType = 'chemotrophic';
-    } else if (photoFitness > 0.05) {
+    } else if (photoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
         cell.floraType = 'photosynthetic';
     } else {
         cell.floraType = 'barren';
@@ -1478,12 +1479,12 @@ function computeRegionalFloraCell(cell) {
   }
 
   const water = Math.max(cell.saturation, cell.waterAvailability);
-  const photoFitness = water * 0.85 * (0.5 + 0.5 * (1 - cell.baseElevation));
-  const chemoFitness = cell.mineralTotal * Math.max(water, cell.groundwater * 1.4) * 1.2;
+  const photoFitness = water * 0.8; // R1-FIX4A: removed elevation penalty, coefficient 0.8 matches planetary/hi-res
+  const chemoFitness = cell.mineralTotal * Math.max(water, (cell.volcanism || 0) * 1.5) * 1.2; // R1-FIX3: volcanism, not groundwater
   const mixoFitness  = (0.6 + 0.5 * cell.mineralTotal) * water;
   const maxFit = Math.max(photoFitness, chemoFitness, mixoFitness);
 
-  if (maxFit < 0.05) { cell.floraType = 'barren'; cell.floraDensity = 0; return; }
+  if (maxFit < 0.02) { cell.floraType = 'barren'; cell.floraDensity = 0; return; } // R1-FIX4B: barren threshold 0.02
   if (photoFitness >= chemoFitness && photoFitness >= mixoFitness) {
     cell.floraType = 'photosynthetic';
   } else if (chemoFitness >= mixoFitness) {

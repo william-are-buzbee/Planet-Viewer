@@ -1413,7 +1413,7 @@ function step5_computeFlora() {
     const light = 1.0;
     const water = c.waterAvailability;
     const photoFitness = light * water * 0.8;
-    const chemoFitness = c.mineralTotal * Math.max(water, c.groundwater * 1.5) * 1.2;
+    const chemoFitness = c.mineralTotal * Math.max(water, c.volcanism * 1.5) * 1.2; // R1-FIX3: unified chemo secondary factor (volcanism, not groundwater)
     const mixoFitness  = (0.6 + 0.5 * c.mineralTotal) * water;
     const maxFitness = Math.max(photoFitness, chemoFitness, mixoFitness);
 
@@ -1459,7 +1459,7 @@ function step5b_deriveTerrainType() {
     // function sees inputs comparable to the high-res grid's.
     const grainSize     = clamp(0.25 + c.elevation * 0.6, 0.05, 0.95);
     const saturation    = clamp(c.waterAvailability || 0, 0, 1);
-    const groundCover   = c.floraDensity > 0 ? Math.max(0.3, c.floraDensity * 0.8) : 0;
+    const groundCover   = c.floraDensity > 0 ? c.floraDensity * 0.6 : 0; // R1-FIX5: removed 0.3 floor, reduced multiplier to match hi-res pipeline
     const canopyDensity = c.floraDensity > 0.2 ? c.floraDensity * 0.7 : 0;
     const chemoCrust    = c.floraType === 'chemotrophic' ? clamp(c.floraDensity * 0.5, 0, 1) : 0;
     const waterTableDepth = clamp((1 - saturation) * (0.3 + c.elevation * 2), 0, 1);

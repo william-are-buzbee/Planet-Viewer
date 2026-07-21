@@ -10,6 +10,12 @@ import {
 import { deriveTerrainAndCover, terrainTypeToInt, coverTypeToInt, intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
 
+// R1-FIX1: smooth saturation factor helper (module-level, used by stepHR6_floraRow)
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 // Forward declaration — bilinearInterpolate from regional-gen.js
 // We import it dynamically to avoid circular deps, but actually it's used
 // in planet-gen too. Let's define a local version that reads state.cells.
@@ -329,7 +335,7 @@ function stepHR6_floraRow(hy) {
     if (hasWater) gc = 0.3;
     else if (grain > 0.8) gc = 0.08;
     else {
-      const waterFactor = clamp(precip * 3.0 + gw * 2.0, 0, 1);
+      const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
       gc = (0.5 + (1.0 - grain) * 0.4) * waterFactor;
     }
     state.hiResData.groundCover[hi] = gc;
@@ -337,13 +343,11 @@ function stepHR6_floraRow(hy) {
     // Canopy
     let cd = 0;
     if (!hasWater && grain <= 0.7) {
-      const waterFactor = Math.min(1, precip * 3.0 + gw * 1.5);
-      let satFactor;
-      if (sat > 0.95) satFactor = 0.15;
-      else if (sat > 0.85) satFactor = 0.35;
-      else if (sat > 0.5) satFactor = 0.80;
-      else if (sat > 0.3) satFactor = 1.0;
-      else satFactor = 0.45;
+      const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
+      // R1-FIX1: smooth saturation factor
+      const wetPenalty = smoothstep(0.4, 1.0, sat);
+      const dryPenalty = 1.0 - smoothstep(0.05, 0.35, sat);
+      const satFactor = Math.max(0.25, 1.0 - 0.65 * wetPenalty - 0.55 * dryPenalty);
       const subFactor = grain < 0.5 ? 1.0 : Math.max(0, 1.0 - (grain - 0.5) * 3.0);
       cd = waterFactor * satFactor * subFactor;
       if (waterFactor > 0.05 && subFactor > 0.1) cd = Math.max(cd, 0.12);
