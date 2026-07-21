@@ -13,6 +13,7 @@ import {
 } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
 import { REGIONAL_SIZE } from './regional-gen.js';
+import { renderRegionalMap, renderTileDetail } from './regional-render.js';
 
 const CHUNK_W = 512, CHUNK_H = 512;
 const CHUNK_TOTAL = CHUNK_W * CHUNK_H;
