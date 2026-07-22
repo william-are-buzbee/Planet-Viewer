@@ -86,6 +86,10 @@ function showTooltip(cell, mouseX, mouseY) {
         (cell.chemoCrust || 0) > 0 ? '  crust ' + (cell.chemoCrust || 0).toFixed(2) : ''}</div>
     ` : `<div class="tip-row"><b>Flora:</b> barren</div>`}
     <div class="tip-row"><b>Stream:</b> ${['ridge','tributary','secondary','major'][cell.streamOrder || 0]}</div>
+    <div class="tip-row"><b>WTD</b> ${(cell.waterTableDepth || 0).toFixed(2)} | <b>Wet</b> ${
+        (cell.wetness || 0).toFixed(2)}  <b>WD</b> ${(cell.waterDepth || 0).toFixed(2)} | <b>Pela</b> ${
+        (cell.pelaRaft || 0).toFixed(2)}  <b>Relict</b> ${(cell.kolmRelict || 0).toFixed(2)}${
+        (cell.baseCanopy || 0) !== (cell.canopy || 0) ? '  <b>bCan</b> ' + ((cell.baseCanopy || 0) * 100).toFixed(0) + '%' : ''}</div>
     ` : `
     <div class="tip-row"><b>SST:</b> ${(cell.sst || 0).toFixed(2)}  <b>Current:</b> ${
         (cell.currentSpeed || 0).toFixed(2)} (${Math.round(Math.atan2(cell.currentV || 0, cell.currentU || 0) * 180 / Math.PI)}°)</div>
@@ -463,6 +467,7 @@ function captureSnapshot() {
       html += `<div class="snap-header">REGION (${rx}, ${ry}) — ${rZone} ${rPlate}</div>`;
       html += `<div class="snap-row"><b>Elev</b> <span class="val">${rc.baseElevation !== undefined ? rc.baseElevation.toFixed(3) : (rc.elevation || 0).toFixed(3)}</span> | <b>Terrain:</b> ${rc.terrainType || '—'} | <b>Cover:</b> ${rc.coverType || 'none'}</div>`;
       html += `<div class="snap-row"><b>Grain</b> <span class="val">${(rc.grainSize || 0).toFixed(2)}</span> <b>Sat</b> <span class="val">${(rc.saturation || 0).toFixed(2)}</span> | <b>WTD</b> <span class="val">${(rc.waterTableDepth || 0).toFixed(2)}</span></div>`;
+      html += `<div class="snap-row"><b>Wet</b> <span class="val">${(rc.wetness || 0).toFixed(2)}</span> <b>WD</b> <span class="val">${(rc.waterDepth || 0).toFixed(2)}</span> | <b>Pela</b> <span class="val">${(rc.pelaRaft || 0).toFixed(2)}</span> <b>Relict</b> <span class="val">${(rc.kolmRelict || 0).toFixed(2)}</span>${(rc.baseCanopy || 0) !== (rc.canopy || 0) ? ' <b>bCan</b> <span class="val">' + ((rc.baseCanopy || 0) * 100).toFixed(0) + '%</span>' : ''}</div>`;
       html += `<div class="snap-row"><b>GC</b> <span class="val">${((rc.groundCover || 0) * 100).toFixed(0)}%</span> <b>Canopy</b> <span class="val">${((rc.canopy || 0) * 100).toFixed(0)}%</span> | <b>Flora:</b> ${rc.floraType || 'barren'}</div>`;
       html += `<div class="snap-row"><b>Minerals:</b> Fe <span class="val">${(rMinerals.iron || 0).toFixed(2)}</span> Cu <span class="val">${(rMinerals.copper || 0).toFixed(2)}</span> Mn <span class="val">${(rMinerals.manganese || 0).toFixed(2)}</span></div>`;
       html += `</div>`;
