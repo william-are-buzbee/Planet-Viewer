@@ -96,6 +96,270 @@ function darken(c, factor) {
   };
 }
 
+// ── Terrain blending utilities ──
+
+function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function lerpColor(c1, c2, t) {
+  return {
+    r: Math.round(lerp(c1.r, c2.r, t)),
+    g: Math.round(lerp(c1.g, c2.g, t)),
+    b: Math.round(lerp(c1.b, c2.b, t)),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── Terrain threshold constants ──
+// These MUST match the thresholds in deriveTerrainAndCover (terrain-derive.js).
+//
+// From deriveTerrainAndCover decision tree:
+//   saturation > 0.75  &&  grainSize < 0.6  →  MUD
+//   groundCover > 0.25                      →  GRASS  (primary)
+//   groundCover > 0.08                      →  GRASS  (sparse, after ROCK/SAND checks)
+//   groundCover ≤ 0.08                      →  DIRT
+//
+// Blendable lowland transitions:
+//   1. MUD  ↔  GRASS/DIRT :  saturation  at SAT_MUD  (0.75)
+//   2. GRASS ↔  DIRT      :  groundCover at GC_GRASS (0.08)
+// ══════════════════════════════════════════════════════════════════
+const SAT_MUD  = 0.75;   // saturation > SAT_MUD  → MUD (when grain < 0.6)
+const GC_GRASS = 0.08;   // groundCover > GC_GRASS → GRASS (else DIRT)
+const BLEND_HALF = 0.08; // blend zone half-width: ±BLEND_HALF around each threshold
+
+// ══════════════════════════════════════════════════════════════════
+// ── Base terrain palette (bg + fg) for a given terrain type ──
+// Contains the per-terrain-type palette computation BEFORE any
+// modifiers (wetness, canopy shade, pela raft, kolm relict).
+// ══════════════════════════════════════════════════════════════════
+function computeBaseTerrainPalette(tt, bp) {
+  const { iron, copper, mn, sat, org, gc, cc, grain, depth,
+          livingCoverColor, livingCoverBright, isChemo } = bp;
+
+  let bg, fg;
+
+  // ── BACKGROUND ──
+  if (tt === 'water' || tt === 2) {
+    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
+    let bottomColor;
+    if (gc > 0.05) {
+      const wetMat = darken(livingCoverColor, 0.82);
+      bottomColor = blend(wetMat, substrate, gc, 1 - gc);
+    } else {
+      bottomColor = substrate;
+    }
+    const bottomVisibility = Math.max(0, 1 - depth * 4);
+    bg = blend(MAT.waterSurface, bottomColor, 1 - bottomVisibility, bottomVisibility);
+
+  } else if (tt === 'deep_water' || tt === 1) {
+    bg = { r: 40, g: 58, b: 95 };
+
+  } else if (tt === 'mud' || tt === 3) {
+    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
+    const organicColor = blend(MAT.deadFresh, MAT.deadPeat, 1 - org, org);
+    let mudBase = blend(substrate, organicColor, 1 - org * 0.6, org * 0.6);
+    mudBase = darken(mudBase, 1 - sat * 0.25);
+
+    if (gc > 0.05) {
+      bg = blend(livingCoverColor, mudBase, gc * 0.7, 1 - gc * 0.7);
+    } else {
+      bg = mudBase;
+    }
+
+    if (cc > 0.1 && !isChemo) {
+      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
+      bg = blend(bg, chemoColor, 1 - cc * 0.3, cc * 0.3);
+    }
+
+  } else if (tt === 'grass' || tt === 4) {
+    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
+    const organicSub = blend(substrate, MAT.deadFresh, 1 - org * 0.3, org * 0.3);
+    bg = blend(livingCoverColor, organicSub, gc, 1 - gc);
+    if (cc > 0.1 && !isChemo) {
+      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
+      bg = blend(bg, chemoColor, 1 - cc * 0.3, cc * 0.3);
+    }
+    if (sat > 0.5) {
+      bg = darken(bg, 1 - (sat - 0.5) * 0.15);
+    }
+
+  } else if (tt === 'dirt' || tt === 5) {
+    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
+    const organicTint = blend(substrate, MAT.deadFresh, 1 - org * 0.4, org * 0.4);
+    bg = organicTint;
+    if (gc > 0.05) {
+      bg = blend(bg, livingCoverColor, 1 - gc * 0.7, gc * 0.7);
+    }
+    if (sat > 0.3) {
+      bg = darken(bg, 1 - (sat - 0.3) * 0.2);
+    }
+
+  } else if (tt === 'sand' || tt === 6) {
+    bg = mineralColor(iron, copper, mn, MAT.sand);
+    if (gc > 0.05) {
+      bg = blend(bg, livingCoverColor, 1 - gc * 0.25, gc * 0.25);
+    }
+
+  } else if (tt === 'rock' || tt === 7) {
+    if (grain > 0.85) {
+      bg = mineralColor(iron, copper, mn, MAT.bedrock);
+    } else {
+      const rock = mineralColor(iron, copper, mn, MAT.bedrock);
+      const sub = mineralColor(iron, copper, mn, MAT.substrate);
+      const rockiness = (grain - 0.6) / 0.4;
+      bg = blend(rock, sub, rockiness, 1 - rockiness);
+    }
+    if (gc > 0.03) {
+      bg = blend(bg, livingCoverColor, 1 - gc * 0.2, gc * 0.2);
+    }
+    if (cc > 0.1 && !isChemo) {
+      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
+      bg = blend(bg, chemoColor, 1 - cc * 0.3, cc * 0.3);
+    }
+
+  } else if (tt === 'beach' || tt === 8) {
+    bg = mineralColor(iron, copper, mn, MAT.sand);
+    if (sat > 0.5) {
+      bg = darken(bg, 1 - (sat - 0.5) * 0.2);
+    }
+
+  } else {
+    bg = { r: 100, g: 90, b: 75 };
+  }
+
+  // ── FOREGROUND ──
+  if (tt === 'water' || tt === 2) {
+    const bottomVis = Math.max(0, 1 - depth * 4);
+    if (bottomVis > 0.1 && gc > 0.1) {
+      const wetBright = darken(livingCoverBright, 0.85);
+      fg = blend(wetBright, MAT.skyReflection, bottomVis * 0.4, 1 - bottomVis * 0.4);
+    } else {
+      fg = MAT.skyReflection;
+    }
+  } else if (tt === 'deep_water' || tt === 1) {
+    fg = MAT.skyReflection;
+
+  } else if (tt === 'mud' || tt === 3) {
+    if (gc > 0.2) {
+      fg = blend(livingCoverBright, MAT.skyReflection, gc * 0.5, 1 - gc * 0.5);
+    } else {
+      fg = blend(MAT.skyReflection, MAT.substrate.depleted, sat, 1 - sat);
+    }
+
+  } else if (tt === 'grass' || tt === 4) {
+    if (cc > 0.3) {
+      fg = mineralColor(iron, copper, mn, MAT.chemo);
+      fg = { r: Math.min(255, fg.r + 30), g: Math.min(255, fg.g + 20), b: Math.min(255, fg.b + 20) };
+    } else {
+      fg = livingCoverBright;
+    }
+
+  } else if (tt === 'dirt' || tt === 5) {
+    if (gc > 0.1) {
+      fg = livingCoverColor;
+    } else {
+      const sub = mineralColor(iron, copper, mn, MAT.substrate);
+      fg = { r: Math.min(255, sub.r + 35), g: Math.min(255, sub.g + 25), b: Math.min(255, sub.b + 20) };
+    }
+
+  } else if (tt === 'rock' || tt === 7) {
+    const rockBase = mineralColor(iron, copper, mn, MAT.bedrock);
+    fg = { r: Math.min(255, rockBase.r + 40), g: Math.min(255, rockBase.g + 30), b: Math.min(255, rockBase.b + 25) };
+
+  } else if (tt === 'sand' || tt === 6 || tt === 'beach' || tt === 8) {
+    const sandBase = mineralColor(iron, copper, mn, MAT.sand);
+    fg = { r: Math.min(255, sandBase.r + 25), g: Math.min(255, sandBase.g + 20), b: Math.min(255, sandBase.b + 15) };
+
+  } else {
+    fg = { r: Math.min(255, bg.r + 30), g: Math.min(255, bg.g + 25), b: Math.min(255, bg.b + 20) };
+  }
+
+  return { bg, fg };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── Blend zone detection ──
+// For a cell's terrain type and continuous fields, check if the cell
+// is within ±BLEND_HALF of a threshold boundary. If so, return the
+// secondary terrain type and blend factor (0 = pure primary, 1 = pure
+// secondary). Only lowland ground type transitions are blended:
+//   MUD ↔ GRASS, MUD ↔ DIRT, GRASS ↔ DIRT.
+// WATER, DEEP_WATER, ROCK, SAND, BEACH are not blended.
+// ══════════════════════════════════════════════════════════════════
+function findBlendTarget(tt, gc, sat, grain) {
+  // Normalize string terrain types (int codes may arrive from typed arrays)
+  let ttStr = tt;
+  if (tt === 3) ttStr = 'mud';
+  else if (tt === 4) ttStr = 'grass';
+  else if (tt === 5) ttStr = 'dirt';
+
+  // Only blend between lowland ground types
+  if (ttStr !== 'mud' && ttStr !== 'grass' && ttStr !== 'dirt') return null;
+
+  let bestTarget = null;
+  let bestFactor = 0;
+  let bestProximity = Infinity;
+
+  // ── Transition 1: MUD ↔ GRASS/DIRT via saturation at SAT_MUD ──
+  // Only applies when grain < 0.6 (fine or sandy substrate — matches
+  // deriveTerrainAndCover's condition for the saturated→MUD path).
+  if (grain < 0.6) {
+    const satDist = Math.abs(sat - SAT_MUD);
+    if (satDist < BLEND_HALF) {
+      let target, factor;
+      if (ttStr === 'mud') {
+        // Cell is MUD (sat > SAT_MUD). Blend toward what it would be
+        // if saturation were lower: GRASS if gc > GC_GRASS, else DIRT.
+        target = gc > GC_GRASS ? 'grass' : 'dirt';
+        factor = 1.0 - smoothstep(SAT_MUD - BLEND_HALF, SAT_MUD + BLEND_HALF, sat);
+      } else {
+        // Cell is GRASS or DIRT (sat ≤ SAT_MUD). Blend toward MUD.
+        target = 'mud';
+        factor = smoothstep(SAT_MUD - BLEND_HALF, SAT_MUD + BLEND_HALF, sat);
+      }
+      if (factor > 0.01 && satDist < bestProximity) {
+        bestTarget = target;
+        bestFactor = factor;
+        bestProximity = satDist;
+      }
+    }
+  }
+
+  // ── Transition 2: GRASS ↔ DIRT via groundCover at GC_GRASS ──
+  // Only when not saturated enough for MUD (sat ≤ SAT_MUD).
+  if (sat <= SAT_MUD && (ttStr === 'grass' || ttStr === 'dirt')) {
+    const gcDist = Math.abs(gc - GC_GRASS);
+    if (gcDist < BLEND_HALF) {
+      let target, factor;
+      if (ttStr === 'grass') {
+        // Cell is GRASS (gc > GC_GRASS). Blend toward DIRT.
+        target = 'dirt';
+        factor = 1.0 - smoothstep(GC_GRASS - BLEND_HALF, GC_GRASS + BLEND_HALF, gc);
+      } else {
+        // Cell is DIRT (gc ≤ GC_GRASS). Blend toward GRASS.
+        target = 'grass';
+        factor = smoothstep(GC_GRASS - BLEND_HALF, GC_GRASS + BLEND_HALF, gc);
+      }
+      if (factor > 0.01 && gcDist < bestProximity) {
+        bestTarget = target;
+        bestFactor = factor;
+        bestProximity = gcDist;
+      }
+    }
+  }
+
+  if (bestTarget && bestFactor > 0.01) {
+    return { terrain: bestTarget, factor: bestFactor };
+  }
+  return null;
+}
+
 /**
  * Compute per-tile palette from physical state.
  * @param {object} p - Physical state of the tile
@@ -162,158 +426,26 @@ function computeTilePalette(p) {
     livingCoverBright = MAT.photoBright;
   }
 
-  let bgL1, fgL1, midL1;  // Layer 1 colors (white light)
+  // ── BASE TERRAIN PALETTE (bg + fg) ──
+  // Pack shared parameters for computeBaseTerrainPalette
+  const baseParams = {
+    iron, copper, mn, sat, org, gc, cc, grain, depth,
+    livingCoverColor, livingCoverBright, isChemo,
+  };
 
-  // ── BACKGROUND (Layer 1) ──
-  if (tt === 'water' || tt === 2) {
-    // What's visible at the bottom: living mat (if present) over mineral substrate.
-    // The mat doesn't vanish when submerged — it's still there under the water.
-    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
-    let bottomColor;
-    if (gc > 0.05) {
-      // Living cover visible through the water, darkened by wet film
-      const wetMat = darken(livingCoverColor, 0.82);
-      bottomColor = blend(wetMat, substrate, gc, 1 - gc);
-    } else {
-      bottomColor = substrate;
-    }
-    const bottomVisibility = Math.max(0, 1 - depth * 4);  // fades by 0.25m
-    bgL1 = blend(MAT.waterSurface, bottomColor, 1 - bottomVisibility, bottomVisibility);
+  const primary = computeBaseTerrainPalette(tt, baseParams);
+  let bgL1 = primary.bg;
+  let fgL1 = primary.fg;
 
-  } else if (tt === 'deep_water' || tt === 1) {
-    bgL1 = { r: 40, g: 58, b: 95 };  // deep blue, no bottom visible
-
-  } else if (tt === 'mud' || tt === 3) {
-    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
-    const organicColor = blend(MAT.deadFresh, MAT.deadPeat, 1 - org, org);
-    let mudBase = blend(substrate, organicColor, 1 - org * 0.6, org * 0.6);
-    mudBase = darken(mudBase, 1 - sat * 0.25);
-
-    // Living flora covers the mud surface — same pattern as GRASS
-    // High groundCover: mostly living cover color with dark mud in gaps
-    // Low groundCover: mostly dark wet mud with sparse flora patches
-    if (gc > 0.05) {
-      bgL1 = blend(livingCoverColor, mudBase, gc * 0.7, 1 - gc * 0.7);
-    } else {
-      bgL1 = mudBase;
-    }
-
-    // Chemo overlay only if flora isn't already chemotrophic
-    if (cc > 0.1 && !isChemo) {
-      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
-      bgL1 = blend(bgL1, chemoColor, 1 - cc * 0.3, cc * 0.3);
-    }
-
-  } else if (tt === 'grass' || tt === 4) {
-    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
-    const organicSub = blend(substrate, MAT.deadFresh, 1 - org * 0.3, org * 0.3);
-    bgL1 = blend(livingCoverColor, organicSub, gc, 1 - gc);
-    // Only apply additional chemo tinting if flora is NOT already chemotrophic
-    // (avoids double-tinting on chemo tiles where livingCoverColor is already chemo)
-    if (cc > 0.1 && !isChemo) {
-      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
-      bgL1 = blend(bgL1, chemoColor, 1 - cc * 0.3, cc * 0.3);
-    }
-    if (sat > 0.5) {
-      bgL1 = darken(bgL1, 1 - (sat - 0.5) * 0.15);
-    }
-
-  } else if (tt === 'dirt' || tt === 5) {
-    const substrate = mineralColor(iron, copper, mn, MAT.substrate);
-    const organicTint = blend(substrate, MAT.deadFresh, 1 - org * 0.4, org * 0.4);
-    bgL1 = organicTint;
-    // Ground cover: if mat is present on dirt, it should be visible
-    if (gc > 0.05) {
-      bgL1 = blend(bgL1, livingCoverColor, 1 - gc * 0.7, gc * 0.7);
-    }
-    if (sat > 0.3) {
-      bgL1 = darken(bgL1, 1 - (sat - 0.3) * 0.2);
-    }
-
-  } else if (tt === 'sand' || tt === 6) {
-    bgL1 = mineralColor(iron, copper, mn, MAT.sand);
-    if (gc > 0.05) {
-      bgL1 = blend(bgL1, livingCoverColor, 1 - gc * 0.25, gc * 0.25);
-    }
-
-  } else if (tt === 'rock' || tt === 7) {
-    if (grain > 0.85) {
-      bgL1 = mineralColor(iron, copper, mn, MAT.bedrock);
-    } else {
-      const rock = mineralColor(iron, copper, mn, MAT.bedrock);
-      const sub = mineralColor(iron, copper, mn, MAT.substrate);
-      const rockiness = (grain - 0.6) / 0.4;  // 0 at grain=0.6, 1 at grain=1.0
-      bgL1 = blend(rock, sub, rockiness, 1 - rockiness);
-    }
-    if (gc > 0.03) {
-      bgL1 = blend(bgL1, livingCoverColor, 1 - gc * 0.2, gc * 0.2);
-    }
-    // Only apply additional chemo tinting if flora is NOT already chemotrophic
-    // (avoids double-tinting on chemo tiles where livingCoverColor is already chemo)
-    if (cc > 0.1 && !isChemo) {
-      const chemoColor = mineralColor(iron, copper, mn, MAT.chemo);
-      bgL1 = blend(bgL1, chemoColor, 1 - cc * 0.3, cc * 0.3);
-    }
-
-  } else if (tt === 'beach' || tt === 8) {
-    bgL1 = mineralColor(iron, copper, mn, MAT.sand);
-    if (sat > 0.5) {
-      bgL1 = darken(bgL1, 1 - (sat - 0.5) * 0.2);
-    }
-
-  } else {
-    bgL1 = { r: 100, g: 90, b: 75 };  // Fallback
-  }
-
-  // ── FOREGROUND (Layer 1) ──
-  if (tt === 'water' || tt === 2) {
-    // Shallow water: mat highlights show through alongside sky reflection
-    const bottomVis = Math.max(0, 1 - depth * 4);
-    if (bottomVis > 0.1 && gc > 0.1) {
-      const wetBright = darken(livingCoverBright, 0.85);
-      fgL1 = blend(wetBright, MAT.skyReflection, bottomVis * 0.4, 1 - bottomVis * 0.4);
-    } else {
-      fgL1 = MAT.skyReflection;
-    }
-  } else if (tt === 'deep_water' || tt === 1) {
-    fgL1 = MAT.skyReflection;
-
-  } else if (tt === 'mud' || tt === 3) {
-    // Mud fg: puddle reflections + flora highlights
-    if (gc > 0.2) {
-      // Flora present: highlights are a mix of living cover bright + water reflection
-      fgL1 = blend(livingCoverBright, MAT.skyReflection, gc * 0.5, 1 - gc * 0.5);
-    } else {
-      // Bare mud: puddle reflections only
-      fgL1 = blend(MAT.skyReflection, MAT.substrate.depleted, sat, 1 - sat);
-    }
-
-  } else if (tt === 'grass' || tt === 4) {
-    if (cc > 0.3) {
-      fgL1 = mineralColor(iron, copper, mn, MAT.chemo);
-      fgL1 = { r: Math.min(255, fgL1.r + 30), g: Math.min(255, fgL1.g + 20), b: Math.min(255, fgL1.b + 20) };
-    } else {
-      fgL1 = livingCoverBright;
-    }
-
-  } else if (tt === 'dirt' || tt === 5) {
-    if (gc > 0.1) {
-      fgL1 = livingCoverColor;
-    } else {
-      const sub = mineralColor(iron, copper, mn, MAT.substrate);
-      fgL1 = { r: Math.min(255, sub.r + 35), g: Math.min(255, sub.g + 25), b: Math.min(255, sub.b + 20) };
-    }
-
-  } else if (tt === 'rock' || tt === 7) {
-    const rockBase = mineralColor(iron, copper, mn, MAT.bedrock);
-    fgL1 = { r: Math.min(255, rockBase.r + 40), g: Math.min(255, rockBase.g + 30), b: Math.min(255, rockBase.b + 25) };
-
-  } else if (tt === 'sand' || tt === 6 || tt === 'beach' || tt === 8) {
-    const sandBase = mineralColor(iron, copper, mn, MAT.sand);
-    fgL1 = { r: Math.min(255, sandBase.r + 25), g: Math.min(255, sandBase.g + 20), b: Math.min(255, sandBase.b + 15) };
-
-  } else {
-    fgL1 = { r: Math.min(255, bgL1.r + 30), g: Math.min(255, bgL1.g + 25), b: Math.min(255, bgL1.b + 20) };
+  // ── TERRAIN PALETTE BLENDING ──
+  // Blend between terrain palettes near threshold boundaries to eliminate
+  // hard-edged rectangular patches at hi-res grid boundaries.
+  const blendTarget = findBlendTarget(tt, gc, sat, grain);
+  if (blendTarget) {
+    const secondary = computeBaseTerrainPalette(blendTarget.terrain, baseParams);
+    const t = blendTarget.factor;
+    bgL1 = lerpColor(bgL1, secondary.bg, t);
+    fgL1 = lerpColor(fgL1, secondary.fg, t);
   }
 
   // ── Continuous wetness modifier ──
@@ -395,6 +527,7 @@ function computeTilePalette(p) {
   // ── KOLM RELICT CONTRIBUTION (on WATER / DEEP_WATER terrain) ──
   // Dead mineral-ceramic steles standing in water. No shade (no fronds),
   // just visual structure as mid-tone accents.
+  let midL1;
   if ((tt === 'water' || tt === 2 || tt === 'deep_water' || tt === 1) && kolmRelict > 0) {
     // Structural wood color from local mineral chemistry
     // Iron → rust, copper → verdigris, manganese → near-black
