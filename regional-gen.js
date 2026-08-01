@@ -424,7 +424,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
 
   // ── Pass 3b: inherit planetary stream order as floor (LowRes path) ──
   if (state.planet && state.planet.streamOrder) {
-    const MIN_DENSITY = [0, 0.30, 0.55, 0.80];
+    const MIN_DENSITY = [0, 0.30, 0.55, 0.80, 0.92];
 
     for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
       for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
@@ -440,7 +440,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
         if (hrSO > cell.streamOrder) {
           cell.streamOrder = hrSO;
         }
-        const minDensity = MIN_DENSITY[Math.min(cell.streamOrder, 3)];
+        const minDensity = MIN_DENSITY[Math.min(cell.streamOrder, 4)];
         if (cell.drainageDensity < minDensity) {
           cell.drainageDensity = minDensity;
         }
@@ -1046,20 +1046,41 @@ function refineRegionalSubstrateFromHiRes(cell) {
 
   cell.waterTableDepth = cell._hrWaterTableDepth + wtdAdjust;
 
-  // ── Wetness-dependent additional push for channels ──
+  // ── Wetness-dependent additional push for channels (tiered by stream order) ──
   // The hi-res base WTD is ~0.05–0.07 even in wet lowlands, so the
   // structural drainParams adjustment alone (-0.02 to -0.03) doesn't
   // push WTD below zero. In areas with high water supply, channels
   // should have water table at or above the surface. Scale additional
   // push by local water supply so dry channels stay dry.
-  if (so >= 3) {
+  if (so >= 2) {
     const waterSupply = Math.min(1,
       cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
-    cell.waterTableDepth -= waterSupply * 0.08;
-  } else if (so === 2) {
-    const waterSupply = Math.min(1,
-      cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
-    cell.waterTableDepth -= waterSupply * 0.03;
+    let wtdPush;
+    if (so >= 4) {
+      // Major drainage — rivers. Full flooded forest transition.
+      wtdPush = waterSupply * 0.22;
+    } else if (so >= 3) {
+      // Minor channels — streams. Visible wet zone, some shallow water.
+      wtdPush = waterSupply * 0.14;
+    } else {
+      // SO 2 rills — damp ground, barely perceptible water.
+      wtdPush = waterSupply * 0.05;
+    }
+    // Tidal zones: coastal proximity pushes WTD toward zero/negative.
+    // Water table is near sea level at the coast. Stacks with stream order push.
+    const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
+    if (isTidal) {
+      wtdPush += waterSupply * 0.08;
+    }
+    cell.waterTableDepth -= wtdPush;
+  } else {
+    // SO 0-1: still apply tidal push even without channel flow
+    const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
+    if (isTidal) {
+      const waterSupply = Math.min(1,
+        cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
+      cell.waterTableDepth -= waterSupply * 0.08;
+    }
   }
 
   // Recompute saturation from the drainage-modulated WTD
@@ -1268,7 +1289,8 @@ function computeRegionalDrainage(elevGrid) {
       cell.flowAccum = f;
       const fn = Math.log(1 + f) / Math.log(1 + maxFlow);
       cell.drainageDensity = fn;
-      if (fn > 0.75) cell.streamOrder = 3;
+      if (fn > 0.88) cell.streamOrder = 4;
+      else if (fn > 0.75) cell.streamOrder = 3;
       else if (fn > 0.5) cell.streamOrder = 2;
       else if (fn > 0.28) cell.streamOrder = 1;
       else cell.streamOrder = 0;
@@ -1345,15 +1367,30 @@ function computeRegionalSubstrate(cell, seed) {
     else wtdAdjust = dp.channel;
     cell.waterTableDepth += wtdAdjust;
 
-    // ── Wetness-dependent additional push (matches HiRes path) ──
-    if (so >= 3) {
+    // ── Wetness-dependent additional push (tiered by stream order, matches HiRes path) ──
+    if (so >= 2) {
       const waterSupply = Math.min(1,
         cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell.saturation * 0.25);
-      cell.waterTableDepth -= waterSupply * 0.08;
-    } else if (so === 2) {
-      const waterSupply = Math.min(1,
-        cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell.saturation * 0.25);
-      cell.waterTableDepth -= waterSupply * 0.03;
+      let wtdPush;
+      if (so >= 4) {
+        wtdPush = waterSupply * 0.22;
+      } else if (so >= 3) {
+        wtdPush = waterSupply * 0.14;
+      } else {
+        wtdPush = waterSupply * 0.05;
+      }
+      const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
+      if (isTidal) {
+        wtdPush += waterSupply * 0.08;
+      }
+      cell.waterTableDepth -= wtdPush;
+    } else {
+      const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
+      if (isTidal) {
+        const waterSupply = Math.min(1,
+          cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell.saturation * 0.25);
+        cell.waterTableDepth -= waterSupply * 0.08;
+      }
     }
   }
 }
@@ -1397,53 +1434,66 @@ function deriveWTDWater(cells, gridW, gridH) {
       cell.hasWater = cell.waterDepth > 0.02;
 
       // 3. Continuous wetness parameter (blending factor for palette)
-      //    0 at WTD ≥ 0.05 (dry), 1 at WTD ≤ -0.05 (flooded)
-      cell.wetness = 1.0 - smoothstep(-0.05, 0.05, wtd);
+      //    0 at WTD ≥ 0.04 (dry), 1 at WTD ≤ -0.03 (flooded)
+      //    Tightened transition band so more cells show partial wetness.
+      cell.wetness = 1.0 - smoothstep(-0.03, 0.04, wtd);
 
       // 4. Save base canopy BEFORE flood modulation
       //    Needed for kolm relict calculation
       cell.baseCanopy = cell.canopy || 0;
 
       // 5. Flood-kill modulation on living canopy
-      //    Kolm tolerates flooding at the base (stele is waterproof ceramic)
-      //    but mineral supply through the water column fails at depth ~5cm.
-      //    Living canopy declines from WTD -0.05 to -0.20, reaching zero.
-      if (wtd < -0.05) {
-        cell.canopy = (cell.canopy || 0) * smoothstep(-0.20, -0.05, wtd);
+      //    Living canopy starts declining at WTD -0.03, reaches zero by -0.12.
+      //    Compressed from original (-0.05 to -0.20) to match achievable WTD range.
+      if (wtd < -0.03) {
+        cell.canopy = (cell.canopy || 0) * smoothstep(-0.12, -0.03, wtd);
       }
 
       // 6. Pela raft coverage (floating photosynthetic mat on water surface)
       //    Only for photosynthetic or mixotrophic flora types.
-      //    Peaks at depth ~4–10cm, declines in deeper water (wave action,
-      //    reduced substrate mineral input), gone by 30cm.
-      //    Scales with ground cover — more pela on land = more raft material.
+      //    Peak at depth 0.02–0.06 (WTD -0.02 to -0.06), declining from
+      //    0.06–0.18 (deeper channels), gone by depth 0.18 (WTD -0.18).
+      //    Compressed from original (onset 0.04, decline 0.10–0.30).
       const ft = cell.floraType;
       const isPelaCapable = (ft === 'photosynthetic' || ft === 1 ||
                              ft === 'mixotrophic'    || ft === 3);
       if (cell.waterDepth > 0 && isPelaCapable) {
         const depth = cell.waterDepth;
-        const onset   = smoothstep(0.0, 0.04, depth);
-        const decline = 1.0 - smoothstep(0.10, 0.30, depth);
+        const onset   = smoothstep(0.0, 0.02, depth);
+        const decline = 1.0 - smoothstep(0.06, 0.18, depth);
         cell.pelaRaft = onset * decline * 0.75 * Math.min(1.0, (cell.groundCover || 0) * 1.5);
       } else {
         cell.pelaRaft = 0;
       }
 
       // 7. Kolm relict density (dead mineral-ceramic steles still standing)
-      //    Kolm steles don't rot — they're mineral-ceramic. They erode
-      //    geologically over decades. Relicts appear as living kolm dies
-      //    (WTD < -0.05), persist through deep flooding, eventually
-      //    erode away at WTD < -0.50.
-      //    Density proportional to what canopy WOULD be here without flooding.
-      if (wtd < -0.05) {
-        const appear = 1.0 - smoothstep(-0.15, -0.05, wtd);
-        const erode  = smoothstep(-0.50, -0.30, wtd);
+      //    Relicts start appearing at WTD -0.03 (as living canopy declines),
+      //    full density by WTD -0.08, begin eroding at -0.15, gone by -0.25.
+      //    Compressed from original (-0.05/-0.15 appear, -0.30/-0.50 erode).
+      if (wtd < -0.03) {
+        const appear = 1.0 - smoothstep(-0.08, -0.03, wtd);
+        const erode  = smoothstep(-0.25, -0.15, wtd);
         cell.kolmRelict = cell.baseCanopy * 0.8 * appear * erode;
       } else {
         cell.kolmRelict = 0;
       }
     }
   }
+
+  // ── Diagnostic: WTD tuning verification (remove after confirming) ──
+  let negWTD = 0, nzWetness = 0, nzPelaRaft = 0, nzKolmRelict = 0, minWTD = Infinity;
+  for (let ry = 0; ry < gridH; ry++) {
+    for (let rx = 0; rx < gridW; rx++) {
+      const c = cells[rx][ry];
+      if (!c.isLand) continue;
+      if (c.waterTableDepth < 0) negWTD++;
+      if (c.wetness > 0) nzWetness++;
+      if (c.pelaRaft > 0) nzPelaRaft++;
+      if (c.kolmRelict > 0) nzKolmRelict++;
+      if (c.waterTableDepth < minWTD) minWTD = c.waterTableDepth;
+    }
+  }
+  console.log(`[WTD Diagnostic] Negative WTD cells: ${negWTD} | Non-zero wetness: ${nzWetness} | Non-zero pelaRaft: ${nzPelaRaft} | Non-zero kolmRelict: ${nzKolmRelict} | Min WTD: ${minWTD.toFixed(4)}`);
 }
 
 // ── Regional flora ──
