@@ -376,14 +376,14 @@ function computeTilePalette(p) {
 
     // Blend water bg toward livingCoverColor based on pela raft coverage
     bgL1 = {
-      r: Math.round(bgL1.r + (livingCoverColor.r - bgL1.r) * r * 0.7),
-      g: Math.round(bgL1.g + (livingCoverColor.g - bgL1.g) * r * 0.7),
-      b: Math.round(bgL1.b + (livingCoverColor.b - bgL1.b) * r * 0.7)
+      r: Math.round(bgL1.r + (livingCoverColor.r - bgL1.r) * r * 0.85),
+      g: Math.round(bgL1.g + (livingCoverColor.g - bgL1.g) * r * 0.85),
+      b: Math.round(bgL1.b + (livingCoverColor.b - bgL1.b) * r * 0.85)
     };
 
     // At high pela coverage, fg shifts toward livingCoverColor too
-    if (r > 0.4) {
-      const fgBlend = (r - 0.4) / 0.6;  // 0 at r=0.4, ~0.58 at r=0.75
+    if (r > 0.3) {
+      const fgBlend = (r - 0.3) / 0.7;  // 0 at r=0.3, ~0.64 at r=0.75
       fgL1 = {
         r: Math.round(fgL1.r + (livingCoverColor.r - fgL1.r) * fgBlend * 0.4),
         g: Math.round(fgL1.g + (livingCoverColor.g - fgL1.g) * fgBlend * 0.4),
