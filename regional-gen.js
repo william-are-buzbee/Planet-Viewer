@@ -1046,6 +1046,22 @@ function refineRegionalSubstrateFromHiRes(cell) {
 
   cell.waterTableDepth = cell._hrWaterTableDepth + wtdAdjust;
 
+  // ── Wetness-dependent additional push for channels ──
+  // The hi-res base WTD is ~0.05–0.07 even in wet lowlands, so the
+  // structural drainParams adjustment alone (-0.02 to -0.03) doesn't
+  // push WTD below zero. In areas with high water supply, channels
+  // should have water table at or above the surface. Scale additional
+  // push by local water supply so dry channels stay dry.
+  if (so >= 3) {
+    const waterSupply = Math.min(1,
+      cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
+    cell.waterTableDepth -= waterSupply * 0.08;
+  } else if (so === 2) {
+    const waterSupply = Math.min(1,
+      cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
+    cell.waterTableDepth -= waterSupply * 0.03;
+  }
+
   // Recompute saturation from the drainage-modulated WTD
   // (same capillary fringe model as stepHR4_waterTableRow)
   const capillary = (1.0 - cell.grainSize) * 0.15;
@@ -1328,6 +1344,17 @@ function computeRegionalSubstrate(cell, seed) {
     else if (so === 2) wtdAdjust = dp.so2;
     else wtdAdjust = dp.channel;
     cell.waterTableDepth += wtdAdjust;
+
+    // ── Wetness-dependent additional push (matches HiRes path) ──
+    if (so >= 3) {
+      const waterSupply = Math.min(1,
+        cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell.saturation * 0.25);
+      cell.waterTableDepth -= waterSupply * 0.08;
+    } else if (so === 2) {
+      const waterSupply = Math.min(1,
+        cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell.saturation * 0.25);
+      cell.waterTableDepth -= waterSupply * 0.03;
+    }
   }
 }
 
@@ -1417,32 +1444,6 @@ function deriveWTDWater(cells, gridW, gridH) {
       }
     }
   }
-
-  // ── Diagnostic (remove after confirming fix works) ──
-  let totalLand = 0, negWTD = 0, subThreshWTD = 0;
-  let minWTD = Infinity, maxWTD = -Infinity;
-  let nonZeroWet = 0, nonZeroWD = 0, nonZeroPela = 0, nonZeroRelict = 0;
-  for (let ry = 0; ry < gridH; ry++) {
-    for (let rx = 0; rx < gridW; rx++) {
-      const c = cells[rx][ry];
-      if (!c.isLand) continue;
-      totalLand++;
-      const w = c.waterTableDepth;
-      if (w < minWTD) minWTD = w;
-      if (w > maxWTD) maxWTD = w;
-      if (w < 0) negWTD++;
-      if (w < 0.05) subThreshWTD++;
-      if (c.wetness > 0) nonZeroWet++;
-      if (c.waterDepth > 0) nonZeroWD++;
-      if (c.pelaRaft > 0) nonZeroPela++;
-      if (c.kolmRelict > 0) nonZeroRelict++;
-    }
-  }
-  console.log(
-    `[deriveWTDWater] land=${totalLand} | WTD range [${minWTD.toFixed(3)}, ${maxWTD.toFixed(3)}]` +
-    ` | neg=${negWTD} (<0.05)=${subThreshWTD}` +
-    ` | wet=${nonZeroWet} wd=${nonZeroWD} pela=${nonZeroPela} relict=${nonZeroRelict}`
-  );
 }
 
 // ── Regional flora ──
