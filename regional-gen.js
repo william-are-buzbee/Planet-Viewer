@@ -1145,6 +1145,53 @@ function refineRegionalFloraFromHiRes(cell) {
 
   // ── From here, flora type is already set per cell above ──
 
+  // ── S24: Fitness-confidence computation ──
+  // Compute how well the local (regional) physics supports the assigned flora type.
+  // Uses the same fitness formulas as computeRegionalFloraCell (LowRes path).
+  {
+    const waterMetric = Math.max(cell.saturation, cell.waterAvailability || 0);
+    const _mineralTotal = cell.mineralTotal;
+    const _volc = cell.volcanism || 0;
+
+    const _photoFit = waterMetric * 0.8;
+    const _chemoFit = _mineralTotal * Math.max(waterMetric, _volc * 1.5) * 1.2;
+    const _mixoFit  = (0.6 + 0.5 * _mineralTotal) * waterMetric;
+
+    let floraTypeNum;
+    if (cell.floraType === 'photosynthetic') floraTypeNum = 1;
+    else if (cell.floraType === 'chemotrophic') floraTypeNum = 2;
+    else if (cell.floraType === 'mixotrophic') floraTypeNum = 3;
+    else floraTypeNum = 0;
+
+    let assignedFitness;
+    if (floraTypeNum === 1) assignedFitness = _photoFit;
+    else if (floraTypeNum === 2) assignedFitness = _chemoFit;
+    else if (floraTypeNum === 3) assignedFitness = _mixoFit;
+    else assignedFitness = 0;
+
+    const _barrenThreshold = 0.02;
+
+    if (floraTypeNum === 0) {
+      cell.fitnessConfidence = 1.0;
+      cell.pelaConf = 0;
+      cell.kolmConf = 0;
+    } else {
+      const marginOverBarren = assignedFitness - _barrenThreshold;
+      const allFit = [_photoFit, _chemoFit, _mixoFit];
+      const alternatives = allFit.filter((_, i) => i !== (floraTypeNum - 1));
+      const bestAlternative = Math.max(...alternatives, _barrenThreshold);
+      const marginOverAlternative = assignedFitness - bestAlternative;
+      const effectiveMargin = Math.min(marginOverBarren, marginOverAlternative);
+
+      const marginFull = 0.12;
+      const t = Math.max(0, Math.min(1, effectiveMargin / marginFull));
+      cell.fitnessConfidence = t * t * (3 - 2 * t);
+
+      cell.pelaConf = smoothstep(0.0, 0.10, effectiveMargin);
+      cell.kolmConf = smoothstep(0.03, 0.18, effectiveMargin);
+    }
+  }
+
   // R3-FIX2: barren gates canopy
   // Barren cells have no living cover — skip all canopy/groundCover computation
   if (cell.floraType === 'barren') {
@@ -1178,6 +1225,10 @@ function refineRegionalFloraFromHiRes(cell) {
         cell.groundCover = cell._hrGroundCover * 0.6;
         cell.chemoCrust = cell._hrChemoCrust * 0.5;
     }
+
+    // S24: Apply fitness-confidence modulation to water path
+    cell.groundCover *= cell.pelaConf;
+    cell.chemoCrust *= cell.pelaConf;
 
     // Organic content: waterlogged decomposition is slow → organic accumulates
     const prod = cell.groundCover * 0.5;
@@ -1231,11 +1282,16 @@ function refineRegionalFloraFromHiRes(cell) {
   }
   cell.chemoCrust = cc;
 
+  // S24: Apply fitness-confidence modulation — pela (ground cover) is hardier
+  // than kolm (canopy), so they taper at different rates near boundaries.
+  cell.groundCover *= cell.pelaConf;
+  cell.canopy *= cell.kolmConf;
+
   // Density for the flora overlay, from the refined cover values.
   cell.floraDensity = clamp(Math.max(cell.canopy, cell.groundCover), 0, 1);
 
   // Organic content (mirrors stepHR6)
-  const prod = (cell.groundCover + cd) * 0.5;
+  const prod = (cell.groundCover + cell.canopy) * 0.5;
   cell.organicContent = prod * (sat > 0.7 ? 0.7 : 0.3);
 }
 
@@ -1462,6 +1518,8 @@ function deriveWTDWater(cells, gridW, gridH) {
         const onset   = smoothstep(0.0, 0.02, depth);
         const decline = 1.0 - smoothstep(0.06, 0.18, depth);
         cell.pelaRaft = onset * decline * 0.75 * Math.min(1.0, (cell.groundCover || 0) * 1.5);
+        // S24: Marginal pela produces less floating material
+        cell.pelaRaft *= cell.pelaConf || 1.0;
       } else {
         cell.pelaRaft = 0;
       }
@@ -1522,12 +1580,34 @@ function computeRegionalFloraCell(cell) {
     const water = Math.max(cell.saturation, cell.waterAvailability);
     const photoFitness = water * 0.8; // R1-FIX4A: removed elevation penalty, coefficient 0.8 matches planetary/hi-res
     const chemoFitness = cell.mineralTotal * Math.max(water, (cell.volcanism || 0) * 1.5) * 1.2; // R1-FIX3: volcanism, not groundwater
+    const mixoFitness  = (0.6 + 0.5 * cell.mineralTotal) * water;
     if (chemoFitness > photoFitness && chemoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
         cell.floraType = 'chemotrophic';
     } else if (photoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
         cell.floraType = 'photosynthetic';
     } else {
         cell.floraType = 'barren';
+    }
+    // S24: Compute and apply fitness-confidence for water path
+    {
+      let ftNum;
+      if (cell.floraType === 'photosynthetic') ftNum = 1;
+      else if (cell.floraType === 'chemotrophic') ftNum = 2;
+      else if (cell.floraType === 'mixotrophic') ftNum = 3;
+      else ftNum = 0;
+      if (ftNum === 0) {
+        cell.fitnessConfidence = 1.0; cell.pelaConf = 0; cell.kolmConf = 0;
+      } else {
+        const aFit = ftNum === 1 ? photoFitness : ftNum === 2 ? chemoFitness : mixoFitness;
+        const alts = [photoFitness, chemoFitness, mixoFitness].filter((_, i) => i !== (ftNum - 1));
+        const bestAlt = Math.max(...alts, 0.02);
+        const em = Math.min(aFit - 0.02, aFit - bestAlt);
+        const tConf = Math.max(0, Math.min(1, em / 0.12));
+        cell.fitnessConfidence = tConf * tConf * (3 - 2 * tConf);
+        cell.pelaConf = smoothstep(0.0, 0.10, em);
+        cell.kolmConf = smoothstep(0.03, 0.18, em);
+      }
+      cell.groundCover *= cell.pelaConf;
     }
     return;
   }
@@ -1538,7 +1618,11 @@ function computeRegionalFloraCell(cell) {
   const mixoFitness  = (0.6 + 0.5 * cell.mineralTotal) * water;
   const maxFit = Math.max(photoFitness, chemoFitness, mixoFitness);
 
-  if (maxFit < 0.02) { cell.floraType = 'barren'; cell.floraDensity = 0; return; } // R1-FIX4B: barren threshold 0.02
+  if (maxFit < 0.02) { // R1-FIX4B: barren threshold 0.02
+    cell.floraType = 'barren'; cell.floraDensity = 0;
+    cell.fitnessConfidence = 1.0; cell.pelaConf = 0; cell.kolmConf = 0;
+    return;
+  }
   if (photoFitness >= chemoFitness && photoFitness >= mixoFitness) {
     cell.floraType = 'photosynthetic';
   } else if (chemoFitness >= mixoFitness) {
@@ -1548,9 +1632,29 @@ function computeRegionalFloraCell(cell) {
   }
   cell.floraDensity = clamp(maxFit, 0, 1);
 
+  // S24: Fitness-confidence computation (fitness values already available)
+  {
+    let ftNum;
+    if (cell.floraType === 'photosynthetic') ftNum = 1;
+    else if (cell.floraType === 'chemotrophic') ftNum = 2;
+    else ftNum = 3;
+    const aFit = ftNum === 1 ? photoFitness : ftNum === 2 ? chemoFitness : mixoFitness;
+    const alts = [photoFitness, chemoFitness, mixoFitness].filter((_, i) => i !== (ftNum - 1));
+    const bestAlt = Math.max(...alts, 0.02);
+    const em = Math.min(aFit - 0.02, aFit - bestAlt);
+    const tConf = Math.max(0, Math.min(1, em / 0.12));
+    cell.fitnessConfidence = tConf * tConf * (3 - 2 * tConf);
+    cell.pelaConf = smoothstep(0.0, 0.10, em);
+    cell.kolmConf = smoothstep(0.03, 0.18, em);
+  }
+
   // Ground cover vs canopy split
   cell.canopy = clamp(cell.floraDensity * (cell.floraType === 'photosynthetic' ? 1.0 : 0.6), 0, 1);
   cell.groundCover = clamp(cell.floraDensity * 0.8 + cell.saturation * 0.2, 0, 1);
+
+  // S24: Apply fitness-confidence modulation
+  cell.groundCover *= cell.pelaConf;
+  cell.canopy *= cell.kolmConf;
 
   // R3-FIX2: barren gates canopy
   // Barren cells have no living cover (safety net — the early return above
@@ -1623,6 +1727,38 @@ function printRegionalDiagnostic() {
   console.log('Land:', land, 'Water:', water);
   console.log('Terrain types: ' + fmt(counts));
   console.log('Zones: ' + fmt(zoneCounts));
+
+  // S24: Fitness-confidence diagnostic (remove after verification)
+  const floraCounts = {};
+  let confLt05 = 0, confLt01 = 0;
+  const confByType = {};
+  for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
+    for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
+      const c = state.regionalCells[rx][ry];
+      if (!c.isLand) continue;
+      const ft = c.floraType || 'barren';
+      floraCounts[ft] = (floraCounts[ft] || 0) + 1;
+      const fc = c.fitnessConfidence;
+      if (fc !== undefined) {
+        if (fc < 0.5) confLt05++;
+        if (fc < 0.1) confLt01++;
+        if (!confByType[ft]) confByType[ft] = { min: fc, max: fc, sum: fc, n: 1 };
+        else {
+          const s = confByType[ft];
+          s.min = Math.min(s.min, fc);
+          s.max = Math.max(s.max, fc);
+          s.sum += fc;
+          s.n++;
+        }
+      }
+    }
+  }
+  console.log('Flora types: ' + Object.entries(floraCounts).map(([k,v]) => `${k}=${v}`).join('  '));
+  console.log(`Confidence < 0.5: ${confLt05} | < 0.1: ${confLt01}`);
+  for (const [ft, s] of Object.entries(confByType)) {
+    console.log(`  ${ft}: min=${s.min.toFixed(3)} max=${s.max.toFixed(3)} mean=${(s.sum/s.n).toFixed(3)} (n=${s.n})`);
+  }
+
   console.log('=== END REGIONAL DIAGNOSTIC ===');
 }
 
