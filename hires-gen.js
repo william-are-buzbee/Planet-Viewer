@@ -297,12 +297,47 @@ function stepHR6_floraRow(hy) {
     const hi = hy * state.HR_W + hx;
 
     if (!state.hiResData.isLand[hi] || state.hiResData.isFreezing[hi]) {
-      state.hiResData.groundCover[hi] = 0;
-      state.hiResData.canopyDensity[hi] = 0;
-      state.hiResData.chemoCrust[hi] = 0;
-      state.hiResData.organicContent[hi] = 0;
-      state.hiResData.floraType[hi] = 0;
-      continue;
+      if (!state.hiResData.isFreezing[hi]) {
+        // Check if planetary grid considers this land (Session 24c isLand fix)
+        const lx = hx / state.hiResMultiplier;
+        const ly = hy / state.hiResMultiplier;
+        const baseElev = bilinearInterpolate(lx, ly, c => c.elevation);
+
+        // DIAGNOSTIC 1 — log near-coast cells flipped to ocean by noise
+        if (baseElev > 0 && baseElev < 0.03) {
+          if (!stepHR6_floraRow._oceanFlipCount) stepHR6_floraRow._oceanFlipCount = 0;
+          stepHR6_floraRow._oceanFlipCount++;
+          if (stepHR6_floraRow._oceanFlipCount <= 20) {
+            console.log(`OCEAN-FLIP: hx=${hx} hy=${hy}`,
+              `hrElev=${state.hiResData.elevation[hi].toFixed(4)}`,
+              `baseElev=${baseElev.toFixed(4)}`);
+          }
+        }
+
+        if (baseElev > 0.001) {
+          // Planetary grid says land — fall through to flora computation.
+          // Hi-res elevation is negative (noise-flipped), but earlier steps
+          // populated precip/gw/sat/grain with values that produce reasonable
+          // coastal flora. No override needed since stepHR4 clamped via
+          // max(0, elev) and the negative depth yields high saturation.
+        } else {
+          // Genuinely ocean — zero and skip
+          state.hiResData.groundCover[hi] = 0;
+          state.hiResData.canopyDensity[hi] = 0;
+          state.hiResData.chemoCrust[hi] = 0;
+          state.hiResData.organicContent[hi] = 0;
+          state.hiResData.floraType[hi] = 0;
+          continue;
+        }
+      } else {
+        // Freezing — zero and skip
+        state.hiResData.groundCover[hi] = 0;
+        state.hiResData.canopyDensity[hi] = 0;
+        state.hiResData.chemoCrust[hi] = 0;
+        state.hiResData.organicContent[hi] = 0;
+        state.hiResData.floraType[hi] = 0;
+        continue;
+      }
     }
 
     const sat = state.hiResData.saturation[hi];
@@ -376,9 +411,30 @@ function stepHR6_floraRow(hy) {
     else if (photoFit > 0.02) state.hiResData.floraType[hi] = 1;
     else state.hiResData.floraType[hi] = 0;
 
+    // DIAGNOSTIC 2 — log barren cells with high water at higher elevation (warp-related?)
+    if (state.hiResData.floraType[hi] === 0 && state.hiResData.elevation[hi] > 0.03) {
+      const rawWater = Math.min(1, precip * 2.0 + gw * 1.0);
+      if (rawWater > 0.3) {
+        if (!stepHR6_floraRow._highBarrenCount) stepHR6_floraRow._highBarrenCount = 0;
+        stepHR6_floraRow._highBarrenCount++;
+      }
+    }
+
     // Organic content
     const prod = (state.hiResData.groundCover[hi] + cd) * 0.5;
     state.hiResData.organicContent[hi] = prod * (sat > 0.7 ? 0.7 : 0.3);
+  }
+
+  // DIAGNOSTIC — summary on last row
+  if (hy === state.HR_H - 1) {
+    if (stepHR6_floraRow._oceanFlipCount) {
+      console.log(`OCEAN-FLIP total: ${stepHR6_floraRow._oceanFlipCount} cells`);
+      stepHR6_floraRow._oceanFlipCount = 0;
+    }
+    if (stepHR6_floraRow._highBarrenCount) {
+      console.log(`HIGH-BARREN total: ${stepHR6_floraRow._highBarrenCount} cells`);
+      stepHR6_floraRow._highBarrenCount = 0;
+    }
   }
 }
 
