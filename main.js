@@ -196,4 +196,3 @@ async function runGeneration() {
 
 // ── Initialize ──
 initUI(runGeneration);
-runGeneration();

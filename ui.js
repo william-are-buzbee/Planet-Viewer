@@ -52,79 +52,22 @@ const viewMollweideBtn = document.getElementById('viewMollweide');
 
 const HOME_ROT_X = 0.15;
 const HOME_ROT_Y = 0;
+const MAX_PITCH = 80 * Math.PI / 180; // ±80° vertical clamp
 
-let tooltipVisible = false;
 let lastRegionalCoord = null;
 let lastTileCoord = null;
 
-// ── Tooltip ──
-function showTooltip(cell, mouseX, mouseY) {
-  tooltipVisible = true;
-  cellTooltip.style.display = 'block';
-
-  let tx = mouseX + 15;
-  let ty = mouseY - 10;
-  cellTooltip.innerHTML = `
-    <div class="tip-row"><b>Elev:</b> ${cell.elevation.toFixed(3)} — ${
-        cell.isLand ? 'land' : cell.isShallowWater ? 'shallow water' : 'deep water'
-    }</div>
-    <div class="tip-row"><b>Zone:</b> ${cell.zone || '—'}  <b>Terrain:</b> ${
-        cell.terrainType || '—'}${cell.coverType && cell.coverType !== 'none' ? ' / ' + cell.coverType : ''}</div>
-    <div class="tip-row"><b>Temp:</b> ${cell.temperature.toFixed(2)}  <b>Wind:</b> ${
-        (cell.windSpeed || 0).toFixed(2)} (${Math.round(Math.atan2(cell.windV || 0, cell.windU || 0) * 180 / Math.PI)}°)</div>
-    <div class="tip-row"><b>Minerals:</b> Fe ${cell.minerals.iron.toFixed(2)}  Cu ${
-        cell.minerals.copper.toFixed(2)}  Mn ${cell.minerals.manganese.toFixed(2)}</div>
-    ${cell.isLand ? `
-    <div class="tip-row"><b>Substrate:</b> grain ${(cell.grainSize || 0).toFixed(2)}  sat ${
-        (cell.saturation || 0).toFixed(2)}${cell.hasWater ? '  depth ' + ((cell.waterDepth || 0) * 100).toFixed(0) + ' cm' : ''}</div>
-    <div class="tip-row"><b>Water:</b> precip ${cell.precipitation.toFixed(2)}  gw ${
-        (cell.groundwater || 0).toFixed(2)}  avail ${(cell.waterAvailability || 0).toFixed(2)}  drain ${
-        (cell.drainage || 0).toFixed(2)}</div>
-    ${cell.floraDensity > 0 ? `
-    <div class="tip-row"><b>Flora:</b> ${cell.floraType} (${(cell.floraDensity || 0).toFixed(2)})  gc ${
-        ((cell.groundCover || 0) * 100).toFixed(0)}%${(cell.canopy || 0) > 0 ? '  canopy ' + ((cell.canopy || 0) * 100).toFixed(0) + '%' : ''}${
-        (cell.chemoCrust || 0) > 0 ? '  crust ' + (cell.chemoCrust || 0).toFixed(2) : ''}</div>
-    ` : `<div class="tip-row"><b>Flora:</b> barren</div>`}
-    <div class="tip-row"><b>Stream:</b> ${['ridge','tributary','secondary','major'][cell.streamOrder || 0]}</div>
-    <div class="tip-row"><b>WTD</b> ${(cell.waterTableDepth || 0).toFixed(2)} | <b>Wet</b> ${
-        (cell.wetness || 0).toFixed(2)}  <b>WD</b> ${(cell.waterDepth || 0).toFixed(2)} | <b>Pela</b> ${
-        (cell.pelaRaft || 0).toFixed(2)}  <b>Relict</b> ${(cell.kolmRelict || 0).toFixed(2)}${
-        (cell.baseCanopy || 0) !== (cell.canopy || 0) ? '  <b>bCan</b> ' + ((cell.baseCanopy || 0) * 100).toFixed(0) + '%' : ''}</div>
-    ` : `
-    <div class="tip-row"><b>SST:</b> ${(cell.sst || 0).toFixed(2)}  <b>Current:</b> ${
-        (cell.currentSpeed || 0).toFixed(2)} (${Math.round(Math.atan2(cell.currentV || 0, cell.currentU || 0) * 180 / Math.PI)}°)</div>
-    `}
-  `;
-
-  const rect = cellTooltip.getBoundingClientRect();
-  if (tx + rect.width > window.innerWidth - 8) tx = mouseX - rect.width - 10;
-  if (ty + rect.height > window.innerHeight - 8) ty = mouseY - rect.height - 10;
-  if (tx < 4) tx = 4;
-  if (ty < 4) ty = 4;
-
-  cellTooltip.style.left = tx + 'px';
-  cellTooltip.style.top = ty + 'px';
+// ── Info panel (replaces floating tooltip) ──
+function updateInfoPanel() {
+  captureSnapshot();
 }
 
-function hideTooltip() {
-  tooltipVisible = false;
-  cellTooltip.style.display = 'none';
+function showCellInfo(x, y) {
+  // Info panel updates via captureSnapshot after regional view loads
 }
 
-function showCellInfo(x, y, mouseEvent) {
-  if (!state.cells) return;
-  const c = state.cells[y * W + x];
-  if (mouseEvent) {
-    showTooltip(c, mouseEvent.clientX, mouseEvent.clientY);
-  }
-}
-
-function showRegionalCellTooltip(rx, ry, mouseEvent) {
-  if (!state.regionalCells || !state.regionalCells[rx] || !state.regionalCells[rx][ry]) return;
-  const c = state.regionalCells[rx][ry];
-  if (mouseEvent) {
-    showTooltip(c, mouseEvent.clientX, mouseEvent.clientY);
-  }
+function showRegionalCellTooltip(rx, ry) {
+  // Info panel updates via captureSnapshot after tile view opens
 }
 
 // ── Globe interaction state ──
@@ -201,7 +144,6 @@ function setView(view) {
   mollweideCanvas.classList.add('hidden-canvas');
   speedControl.style.display = 'none';
   keysHeld.clear();
-  hideTooltip();
 
   if (view === 'flat') {
     canvas.classList.remove('hidden-canvas');
@@ -263,8 +205,8 @@ function processHeldKeys() {
 
   if (keysHeld.has('ArrowLeft')) { state.rotY -= speed; moved = true; }
   if (keysHeld.has('ArrowRight')) { state.rotY += speed; moved = true; }
-  if (keysHeld.has('ArrowUp')) { state.rotX = Math.max(-Math.PI / 2, state.rotX - speed); moved = true; }
-  if (keysHeld.has('ArrowDown')) { state.rotX = Math.min(Math.PI / 2, state.rotX + speed); moved = true; }
+  if (keysHeld.has('ArrowUp')) { state.rotX = Math.max(-MAX_PITCH, state.rotX - speed); moved = true; }
+  if (keysHeld.has('ArrowDown')) { state.rotX = Math.min(MAX_PITCH, state.rotX + speed); moved = true; }
 
   return moved;
 }
@@ -448,9 +390,10 @@ function captureSnapshot() {
   html += `<div class="snap-header">PLANET (${px}, ${py}) — ${pBand} ${pPlateType}</div>`;
   html += `<div class="snap-row"><b>Elev</b> <span class="val">${pc.elevation.toFixed(3)}</span> | <b>Temp</b> <span class="val">${pc.temperature.toFixed(2)}</span> | <b>Wind</b> <span class="val">${(pc.windSpeed || 0).toFixed(2)}</span> (${windDir}°)</div>`;
   html += `<div class="snap-row"><b>Fe</b> <span class="val">${pc.minerals.iron.toFixed(2)}</span> <b>Cu</b> <span class="val">${pc.minerals.copper.toFixed(2)}</span> <b>Mn</b> <span class="val">${pc.minerals.manganese.toFixed(2)}</span> | ${dominant}</div>`;
+  html += `<div class="snap-row"><b>Terrain:</b> ${pc.terrainType || '—'}${pc.coverType && pc.coverType !== 'none' ? ' / ' + pc.coverType : ''} | ${pc.isLand ? 'land' : pc.isShallowWater ? 'shallow' : 'deep'}</div>`;
   if (pc.isLand) {
     html += `<div class="snap-row"><b>Precip</b> <span class="val">${pc.precipitation.toFixed(2)}</span> <b>GW</b> <span class="val">${(pc.groundwater || 0).toFixed(2)}</span> <b>Drain</b> <span class="val">${(pc.drainage || 0).toFixed(2)}</span> <b>Avail</b> <span class="val">${(pc.waterAvailability || 0).toFixed(2)}</span></div>`;
-    html += `<div class="snap-row"><b>Flora:</b> ${pc.floraType || 'barren'} (${(pc.floraDensity || 0).toFixed(2)}) | <b>Terrain:</b> ${pc.terrainType || '—'}</div>`;
+    html += `<div class="snap-row"><b>Flora:</b> ${pc.floraType || 'barren'} (${(pc.floraDensity || 0).toFixed(2)})</div>`;
   } else {
     html += `<div class="snap-row"><b>SST</b> <span class="val">${(pc.sst || 0).toFixed(2)}</span> | <b>Current</b> <span class="val">${(pc.currentSpeed || 0).toFixed(2)}</span> (${Math.round(Math.atan2(pc.currentV || 0, pc.currentU || 0) * 180 / Math.PI)}°)</div>`;
   }
@@ -511,6 +454,13 @@ function captureSnapshot() {
 // ── initUI — Wire up all event listeners ──
 // ══════════════════════════════════════════════════════════════════
 export function initUI(runGeneration) {
+
+  // ── Default seed ──
+  seedInput.value = '5';
+
+  // ── Hide floating tooltips permanently (replaced by info panel) ──
+  cellTooltip.style.display = 'none';
+  tileTooltip.style.display = 'none';
 
   // ── Populate paramConfig ──
   Object.assign(paramConfig, {
@@ -647,8 +597,10 @@ export function initUI(runGeneration) {
     const x = Math.floor((e.clientX - rect.left) * scaleX);
     const y = Math.floor((e.clientY - rect.top) * scaleY);
     if (x >= 0 && x < W && y >= 0 && y < H) {
-      showCellInfo(x, y, e);
+      lastRegionalCoord = null;
+      lastTileCoord = null;
       showRegionalView(x, y);
+      updateInfoPanel();
     }
   });
 
@@ -660,8 +612,10 @@ export function initUI(runGeneration) {
     const py = (e.clientY - rect.top) * scaleY;
     const cell = mollweidePixelToCell(px, py);
     if (cell) {
-      showCellInfo(cell.x, cell.y, e);
+      lastRegionalCoord = null;
+      lastTileCoord = null;
       showRegionalView(cell.x, cell.y);
+      updateInfoPanel();
     }
   });
 
@@ -682,7 +636,7 @@ export function initUI(runGeneration) {
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragMoved = true;
     state.rotY += dx * 0.01;
     state.rotX += dy * 0.01;
-    state.rotX = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, state.rotX));
+    state.rotX = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, state.rotX));
     state.lastMX = e.clientX;
     state.lastMY = e.clientY;
     renderGlobe();
@@ -712,7 +666,7 @@ export function initUI(runGeneration) {
     if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragMoved = true;
     state.rotY += dx * 0.01;
     state.rotX += dy * 0.01;
-    state.rotX = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, state.rotX));
+    state.rotX = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, state.rotX));
     state.lastMX = e.touches[0].clientX;
     state.lastMY = e.touches[0].clientY;
     renderGlobe();
@@ -735,16 +689,11 @@ export function initUI(runGeneration) {
     const py = (e.clientY - rect.top) * scaleY;
     const cell = globePixelToCell(px, py);
     if (cell) {
-      showCellInfo(cell.x, cell.y, e);
+      lastRegionalCoord = null;
+      lastTileCoord = null;
       showRegionalView(cell.x, cell.y);
+      updateInfoPanel();
     }
-  });
-
-  // ── Tooltip dismiss ──
-  document.addEventListener('mousedown', (e) => {
-    if (!tooltipVisible) return;
-    if (e.target === canvas || e.target === globeCanvas || e.target === mollweideCanvas || e.target === regionalCanvas) return;
-    hideTooltip();
   });
 
   // ── Regional canvas click ──
@@ -757,8 +706,9 @@ export function initUI(runGeneration) {
     const ry = Math.floor((e.clientY - rect.top) * scaleY);
     if (rx >= 0 && rx < REGIONAL_SIZE && ry >= 0 && ry < REGIONAL_SIZE) {
       lastRegionalCoord = { rx, ry };
-      showRegionalCellTooltip(rx, ry, e);
+      lastTileCoord = null;
       openTileView(rx, ry);
+      updateInfoPanel();
     }
   });
 
@@ -794,6 +744,9 @@ export function initUI(runGeneration) {
             statusText.textContent = `Tile panned in ${(tt1 - tt0).toFixed(0)} ms`;
           }
           renderRegionalMap(regionalOverlaySelect.value);
+          lastRegionalCoord = { rx: trx, ry: tryy };
+          lastTileCoord = null;
+          updateInfoPanel();
         }
         return;
       }
@@ -823,6 +776,9 @@ export function initUI(runGeneration) {
         render(overlaySelect.value);
         if (state.currentView === 'globe') renderGlobe();
         if (state.currentView === 'mollweide') renderMollweide();
+        lastRegionalCoord = null;
+        lastTileCoord = null;
+        updateInfoPanel();
         return;
       }
 
@@ -856,60 +812,16 @@ export function initUI(runGeneration) {
   const streamNames = ['ridge', 'tributary', 'secondary', 'major'];
   const floraNames = ['barren', 'photosynthetic', 'chemotrophic', 'mixotrophic'];
 
-  tileCanvasEl.addEventListener('mousemove', (e) => {
-    if (!state.currentTileData) { tileTooltip.style.display = 'none'; return; }
+  tileCanvasEl.addEventListener('click', (e) => {
+    if (!state.currentTileData) return;
     const rect = tileCanvasEl.getBoundingClientRect();
     const scaleX = tileCanvasEl.width / rect.width;
     const scaleY = tileCanvasEl.height / rect.height;
     const tx = Math.floor((e.clientX - rect.left) * scaleX);
     const ty = Math.floor((e.clientY - rect.top) * scaleY);
-    if (tx < 0 || tx >= CHUNK_W || ty < 0 || ty >= CHUNK_H) { tileTooltip.style.display = 'none'; return; }
-
-    const i = ty * CHUNK_W + tx;
+    if (tx < 0 || tx >= CHUNK_W || ty < 0 || ty >= CHUNK_H) return;
     lastTileCoord = { tx, ty };
-    const t = state.currentTileData.tiles;
-    const terrain = intToTerrainType(t.terrainType[i]);
-    const cover = intToCoverType(t.coverType[i]);
-
-    const palette = computeTilePalette(tilePhysical(t, i));
-    const toHex = (c) => '#' + ((1 << 24) + (c.r << 16) + (c.g << 8) + c.b).toString(16).slice(1);
-    const bgHex = toHex(palette.bg), fgHex = toHex(palette.fg), midHex = toHex(palette.mid);
-    const sw = (hex) => `<span style="display:inline-block;width:9px;height:9px;border:1px solid #000;vertical-align:middle;background:${hex}"></span>`;
-
-    const floraType = floraNames[t.floraType[i]] || 'barren';
-    const hasFlora = t.floraType[i] > 0;
-    const depthCm = (t.waterDepth[i] * 100);
-
-    tileTooltip.style.display = 'block';
-    tileTooltip.innerHTML = `
-      <div class="tip-row"><b>Tile:</b> (${tx}, ${ty})  <b>Elev:</b> ${t.elevation[i].toFixed(3)}${
-          t.elevation[i] <= 0 ? ' (ocean)' : ''}</div>
-      <div class="tip-row"><b>Terrain:</b> ${terrain}${
-          cover !== 'none' ? ' / ' + cover : ''}  <b>Stream:</b> ${streamNames[t.streamOrder[i]]}</div>
-      <div class="tip-row"><b>Substrate:</b> grain ${t.grainSize[i].toFixed(2)}  sat ${t.saturation[i].toFixed(2)}${
-          t.waterDepth[i] > 0 ? '  water ' + (depthCm < 10 ? depthCm.toFixed(1) + ' cm' : (t.waterDepth[i]).toFixed(2) + ' m') : ''}</div>
-      ${hasFlora ? `
-      <div class="tip-row"><b>Flora:</b> ${floraType} (${t.floraDensity[i].toFixed(2)})  gc ${
-          (t.groundCover[i] * 100).toFixed(0)}%${t.canopy[i] > 0.01 ? '  canopy ' + (t.canopy[i] * 100).toFixed(0) + '%' : ''}${
-          t.chemoCrust && (t.chemoCrust[i] || 0) > 0.01 ? '  crust ' + t.chemoCrust[i].toFixed(2) : ''}</div>
-      ` : `<div class="tip-row"><b>Flora:</b> barren</div>`}
-      <div class="tip-row"><b>Sprite:</b> ${terrain}${cover !== 'none' ? '+' + cover : ''} v${t.groundVariant[i]}${
-          cover !== 'none' ? '/c' + t.coverVariant[i] : ''}</div>
-      <div class="tip-row"><b>Palette:</b> ${sw(bgHex)}${bgHex} ${sw(fgHex)}${fgHex} ${sw(midHex)}${midHex}</div>
-    `;
-
-    let px = e.clientX + 15, py = e.clientY - 10;
-    const trect = tileTooltip.getBoundingClientRect();
-    if (px + trect.width > window.innerWidth - 8) px = e.clientX - trect.width - 10;
-    if (py + trect.height > window.innerHeight - 8) py = e.clientY - trect.height - 10;
-    if (px < 4) px = 4;
-    if (py < 4) py = 4;
-    tileTooltip.style.left = px + 'px';
-    tileTooltip.style.top = py + 'px';
-  });
-
-  tileCanvasEl.addEventListener('mouseleave', () => {
-    tileTooltip.style.display = 'none';
+    updateInfoPanel();
   });
 
   // ── Snapshot button + I key ──
