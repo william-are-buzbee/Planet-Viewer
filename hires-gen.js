@@ -4,21 +4,14 @@
 
 import { state } from './main.js';
 import {
-  W, H, TOTAL, noise2D, noise3D, fractalNoise3D,
-  clamp, bilinearSampleHR
+  W, H, noise2D, noise3D,
+  clamp, smoothstep, bilinearSampleHR
 } from './core-math.js';
 import { deriveTerrainAndCover, terrainTypeToInt, coverTypeToInt, intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
 
-// R1-FIX1: smooth saturation factor helper (module-level, used by stepHR6_floraRow)
-function smoothstep(edge0, edge1, x) {
-  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
-// Forward declaration — bilinearInterpolate from regional-gen.js
-// We import it dynamically to avoid circular deps, but actually it's used
-// in planet-gen too. Let's define a local version that reads state.cells.
+// NOTE: regional-gen.js has a separate bilinearInterpolate for the planetary grid.
+// This version operates on hi-res typed arrays with direct index access.
 function bilinearInterpolate(x, y, accessor) {
   const x0 = Math.floor(x), y0 = Math.floor(y);
   const fx = x - x0, fy = y - y0;
