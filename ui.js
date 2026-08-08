@@ -25,6 +25,41 @@ import {
   CHUNK_W, CHUNK_H
 } from './tile-gen.js';
 
+// ══════════════════════════════════════════════════════════════════
+// ── Region Cache — stores recent regional grids for instant revisit ──
+// ══════════════════════════════════════════════════════════════════
+const regionCache = new Map();
+const MAX_CACHE_SIZE = 8;
+
+function regionCacheKey(cx, cy) {
+  // Round to avoid floating-point key mismatches
+  return `${Math.round(cx * 1000)},${Math.round(cy * 1000)}`;
+}
+
+function getCachedRegion(cx, cy) {
+  return regionCache.get(regionCacheKey(cx, cy)) || null;
+}
+
+function cacheRegion(cx, cy, regionalCells) {
+  const key = regionCacheKey(cx, cy);
+  if (regionCache.has(key)) return; // already cached
+  regionCache.set(key, regionalCells);
+  // Evict oldest if over limit
+  if (regionCache.size > MAX_CACHE_SIZE) {
+    const oldest = regionCache.keys().next().value;
+    regionCache.delete(oldest);
+  }
+}
+
+function clearRegionCache() {
+  regionCache.clear();
+}
+
+// ── Debounced regional navigation state ──
+let _regionPendingTarget = null;
+let _regionIsGenerating = false;
+let _precomputeTimer = null;
+
 // ── Store defaults for reset (initialized lazily to avoid circular-import TDZ) ──
 let defaultParams = null;
 function getDefaultParams() {
@@ -96,6 +131,9 @@ function showRegionalView(planetX, planetY) {
   const seed = parseInt(seedInput.value, 10) || 0;
   state.selectedRegion = { cx: planetX, cy: planetY };
   state.activeControl = 'regional';
+  _regionPendingTarget = null;
+  _regionIsGenerating = false;
+  cancelPrecomputation();
   hideTileView();
   state.tileChunkCache.clear();
 
@@ -106,20 +144,34 @@ function showRegionalView(planetX, planetY) {
   const plateCell = getPlanetaryCell(planetX, planetY);
   regionLabel.textContent = `REGION: (${Math.round(planetX)}, ${Math.round(planetY)}) — ${band}, ${plateCell.plateType}`;
 
-  const t0 = performance.now();
-  generateRegionalDetail(planetX, planetY);
-  const t1 = performance.now();
-
-  renderRegionalMap(regionalOverlaySelect.value);
-  statusText.textContent = `Regional generated in ${(t1 - t0).toFixed(0)} ms`;
+  // Check cache
+  const cached = getCachedRegion(planetX, planetY);
+  if (cached) {
+    state.regionalCells = cached;
+    renderRegionalMap(regionalOverlaySelect.value);
+    statusText.textContent = 'Regional loaded from cache';
+  } else {
+    const t0 = performance.now();
+    generateRegionalDetail(planetX, planetY);
+    const t1 = performance.now();
+    cacheRegion(planetX, planetY, state.regionalCells);
+    renderRegionalMap(regionalOverlaySelect.value);
+    statusText.textContent = `Regional generated in ${(t1 - t0).toFixed(0)} ms`;
+  }
 
   setActiveControl('regional');
   render(overlaySelect.value);
   if (state.currentView === 'globe') renderGlobe();
   if (state.currentView === 'mollweide') renderMollweide();
+
+  // Precompute adjacent regions in background
+  precomputeNeighbors(planetX, planetY);
 }
 
 function closeRegionalView() {
+  cancelPrecomputation();
+  _regionPendingTarget = null;
+  _regionIsGenerating = false;
   state.selectedRegion = null;
   state.regionalCells = null;
   hideTileView();
@@ -451,8 +503,159 @@ function captureSnapshot() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// ── Debounced Regional Navigation ──
+// ══════════════════════════════════════════════════════════════════
+
+function handleRegionalPan(key) {
+  // Cancel any background precomputation — user is actively navigating
+  cancelPrecomputation();
+
+  // Close tile view on first pan
+  if (state.currentTileData) {
+    hideTileView();
+    state.tileChunkCache.clear();
+  }
+
+  // Compute new target position
+  const panStep = REGIONAL_SIZE / CELLS_PER_PLANETARY;
+  if (!_regionPendingTarget) {
+    _regionPendingTarget = { cx: state.selectedRegion.cx, cy: state.selectedRegion.cy };
+  }
+  if (key === 'ArrowRight') _regionPendingTarget.cx += panStep;
+  if (key === 'ArrowLeft')  _regionPendingTarget.cx -= panStep;
+  if (key === 'ArrowDown')  _regionPendingTarget.cy += panStep;
+  if (key === 'ArrowUp')    _regionPendingTarget.cy -= panStep;
+  _regionPendingTarget.cx = ((_regionPendingTarget.cx % W) + W) % W;
+  _regionPendingTarget.cy = Math.max(0, Math.min(H - 1, _regionPendingTarget.cy));
+
+  // Update the selection marker immediately for visual feedback
+  state.selectedRegion.cx = _regionPendingTarget.cx;
+  state.selectedRegion.cy = _regionPendingTarget.cy;
+  updateRegionLabel(_regionPendingTarget.cx, _regionPendingTarget.cy);
+
+  // Redraw planet map with new selection marker
+  render(overlaySelect.value);
+  if (state.currentView === 'globe') renderGlobe();
+  if (state.currentView === 'mollweide') renderMollweide();
+
+  lastRegionalCoord = null;
+  lastTileCoord = null;
+
+  // If not currently generating, start generation for this target
+  if (!_regionIsGenerating) {
+    startRegionGeneration(_regionPendingTarget.cx, _regionPendingTarget.cy);
+  }
+  // If already generating, the completion handler will pick up the latest _regionPendingTarget
+}
+
+function updateRegionLabel(cx, cy) {
+  const band = getLatitudeBand(Math.round(cy));
+  const plateCell = getPlanetaryCell(Math.round(cx), Math.round(cy));
+  regionLabel.textContent = `REGION: (${Math.round(cx)}, ${Math.round(cy)}) — ${band}, ${plateCell.plateType}`;
+}
+
+function startRegionGeneration(cx, cy) {
+  _regionIsGenerating = true;
+
+  // Check cache first — instant load
+  const cached = getCachedRegion(cx, cy);
+  if (cached) {
+    state.regionalCells = cached;
+    renderRegionalMap(regionalOverlaySelect.value);
+    statusText.textContent = 'Regional loaded from cache';
+    _regionIsGenerating = false;
+    updateInfoPanel();
+    // Check if target moved while we were "generating" (cache hit is instant but
+    // the user might have pressed keys between our call and here)
+    checkRegionPendingTarget(cx, cy);
+    return;
+  }
+
+  // Defer generation to next microtask so the selection marker renders first
+  setTimeout(() => {
+    const t0 = performance.now();
+    generateRegionalDetail(cx, cy);
+    const t1 = performance.now();
+    cacheRegion(cx, cy, state.regionalCells);
+    renderRegionalMap(regionalOverlaySelect.value);
+    statusText.textContent = `Regional panned in ${(t1 - t0).toFixed(0)} ms`;
+    _regionIsGenerating = false;
+    updateInfoPanel();
+    // Check if target moved further while we were generating
+    checkRegionPendingTarget(cx, cy);
+  }, 0);
+}
+
+function checkRegionPendingTarget(completedCx, completedCy) {
+  if (_regionPendingTarget &&
+      (Math.round(_regionPendingTarget.cx * 1000) !== Math.round(completedCx * 1000) ||
+       Math.round(_regionPendingTarget.cy * 1000) !== Math.round(completedCy * 1000))) {
+    // Target moved — generate the latest position, skipping intermediates
+    startRegionGeneration(_regionPendingTarget.cx, _regionPendingTarget.cy);
+  } else {
+    _regionPendingTarget = null;
+    // Generation complete and up to date — precompute neighbors
+    precomputeNeighbors(completedCx, completedCy);
+  }
+}
+
+// ── Background Precomputation of Adjacent Regions ──
+function cancelPrecomputation() {
+  if (_precomputeTimer !== null) {
+    clearTimeout(_precomputeTimer);
+    _precomputeTimer = null;
+  }
+}
+
+function precomputeNeighbors(cx, cy) {
+  cancelPrecomputation();
+
+  const panStep = REGIONAL_SIZE / CELLS_PER_PLANETARY;
+  const neighbors = [
+    [((cx + panStep) % W + W) % W, cy],                           // right
+    [((cx - panStep) % W + W) % W, cy],                           // left
+    [cx, Math.max(0, Math.min(H - 1, cy + panStep))],             // down
+    [cx, Math.max(0, Math.min(H - 1, cy - panStep))],             // up
+  ];
+  let i = 0;
+
+  function next() {
+    _precomputeTimer = null;
+    if (i >= neighbors.length) return;
+    // Abort if user started navigating or closed the view
+    if (_regionIsGenerating || !state.selectedRegion) return;
+
+    const [nx, ny] = neighbors[i++];
+
+    // Skip if already cached
+    if (getCachedRegion(nx, ny)) {
+      _precomputeTimer = setTimeout(next, 0);
+      return;
+    }
+
+    // Save current state
+    const savedCells = state.regionalCells;
+
+    // Generate the neighbor (this blocks main thread but happens during idle)
+    generateRegionalDetail(nx, ny);
+    cacheRegion(nx, ny, state.regionalCells);
+
+    // Restore current view's state
+    state.regionalCells = savedCells;
+
+    // Schedule next neighbor
+    _precomputeTimer = setTimeout(next, 0);
+  }
+
+  // Start after a short delay so the current render completes first
+  _precomputeTimer = setTimeout(next, 16);
+}
+
+// ══════════════════════════════════════════════════════════════════
 // ── initUI — Wire up all event listeners ──
 // ══════════════════════════════════════════════════════════════════
+export { clearRegionCache };
+
 export function initUI(runGeneration) {
 
   // ── Default seed ──
@@ -753,32 +956,7 @@ export function initUI(runGeneration) {
 
       if (state.activeControl === 'regional' && state.selectedRegion) {
         e.preventDefault();
-        hideTileView();
-        state.tileChunkCache.clear();
-        const panStep = REGIONAL_SIZE / CELLS_PER_PLANETARY;
-        if (e.key === 'ArrowRight') state.selectedRegion.cx += panStep;
-        if (e.key === 'ArrowLeft')  state.selectedRegion.cx -= panStep;
-        if (e.key === 'ArrowDown')  state.selectedRegion.cy += panStep;
-        if (e.key === 'ArrowUp')    state.selectedRegion.cy -= panStep;
-        state.selectedRegion.cx = ((state.selectedRegion.cx % W) + W) % W;
-        state.selectedRegion.cy = Math.max(0, Math.min(H - 1, state.selectedRegion.cy));
-
-        const band = getLatitudeBand(Math.round(state.selectedRegion.cy));
-        const plateCell = getPlanetaryCell(Math.round(state.selectedRegion.cx), Math.round(state.selectedRegion.cy));
-        regionLabel.textContent = `REGION: (${Math.round(state.selectedRegion.cx)}, ${Math.round(state.selectedRegion.cy)}) — ${band}, ${plateCell.plateType}`;
-
-        const t0 = performance.now();
-        generateRegionalDetail(state.selectedRegion.cx, state.selectedRegion.cy);
-        const t1 = performance.now();
-        renderRegionalMap(regionalOverlaySelect.value);
-        statusText.textContent = `Regional panned in ${(t1 - t0).toFixed(0)} ms`;
-
-        render(overlaySelect.value);
-        if (state.currentView === 'globe') renderGlobe();
-        if (state.currentView === 'mollweide') renderMollweide();
-        lastRegionalCoord = null;
-        lastTileCoord = null;
-        updateInfoPanel();
+        handleRegionalPan(e.key);
         return;
       }
 

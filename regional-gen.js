@@ -124,6 +124,7 @@ function generateRegionalDetail(centerX, centerY) {
 
 // ── Regional detail generation (LOW-RES fallback path — original behavior) ──
 function generateRegionalDetailLowRes(centerX, centerY) {
+  const _t0 = performance.now();
   _planetMaxLandElev = null; // recompute per generation
   const maxLand = getPlanetMaxLandElev();
 
@@ -171,6 +172,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t1 = performance.now();
   // Pass 1b: drainage direction from planetary elevation gradient (globally deterministic).
   // Instead of BFS (which is window-dependent), sample the GLOBAL planetary elevation
   // via bilinearInterpolate at a wide window around each cell to determine downhill
@@ -290,6 +292,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t2 = performance.now();
   // Pass 1c: apply isotropic + anisotropic noise, build cell objects
   for (let ry = 0; ry < S_LR; ry++) {
     for (let rx = 0; rx < S_LR; rx++) {
@@ -405,6 +408,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t3 = performance.now();
   // Pass 2: slopes + zone classification
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
@@ -419,6 +423,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t4 = performance.now();
   // Pass 3: drainage (flow accumulation over regional grid)
   computeRegionalDrainage(elevGrid);
 
@@ -448,6 +453,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t5 = performance.now();
   // Pass 4: substrate, saturation
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
@@ -456,6 +462,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t6 = performance.now();
   // Pass 5a: flora (sets canopy, groundCover — "dry" values before flood modulation)
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
@@ -463,15 +470,30 @@ function generateRegionalDetailLowRes(centerX, centerY) {
     }
   }
 
+  const _t7 = performance.now();
   // Pass 5b: derive water state from WTD (replaces computeStandingWater)
   deriveWTDWater(state.regionalCells, REGIONAL_SIZE, REGIONAL_SIZE);
 
+  const _t8 = performance.now();
   // Pass 5c: terrain type derivation
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
       deriveRegionalTerrainType(state.regionalCells[rx][ry]);
     }
   }
+
+  const _t9 = performance.now();
+  console.log(`Regional gen LowRes breakdown (ms):`,
+    `elev=${(_t1-_t0).toFixed(1)}`,
+    `drainDir=${(_t2-_t1).toFixed(1)}`,
+    `cellBuild=${(_t3-_t2).toFixed(1)}`,
+    `slopes=${(_t4-_t3).toFixed(1)}`,
+    `drainage=${(_t5-_t4).toFixed(1)}`,
+    `substrate=${(_t6-_t5).toFixed(1)}`,
+    `flora=${(_t7-_t6).toFixed(1)}`,
+    `wtdWater=${(_t8-_t7).toFixed(1)}`,
+    `terrain=${(_t9-_t8).toFixed(1)}`,
+    `total=${(_t9-_t0).toFixed(1)}`);
 
   printRegionalDiagnostic();
 }
@@ -485,6 +507,7 @@ function generateRegionalDetailLowRes(centerX, centerY) {
 //    unchanged, so they render identically to the planetary map; channel cells
 //    are pushed wetter / finer, adding detail the high-res grid can't resolve.
 function generateRegionalDetailHiRes(centerX, centerY) {
+  const _t0 = performance.now();
   _planetMaxLandElev = null; // recompute per generation
   const maxLand = getPlanetMaxLandElev();
 
@@ -543,6 +566,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t1 = performance.now();
   // Pass 1b: drainage direction from hi-res elevation gradient (globally deterministic).
   // Instead of BFS (which is window-dependent), sample the GLOBAL hi-res elevation
   // grid at a wide window around each cell to determine downhill direction. The hi-res
@@ -671,6 +695,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t2 = performance.now();
   // Pass 1c: add isotropic + anisotropic noise, sample hi-res fields, build cells.
   for (let ry = 0; ry < S; ry++) {
     for (let rx = 0; rx < S; rx++) {
@@ -926,6 +951,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t3 = performance.now();
   // Pass 2: slopes + zone classification (on the refined elevation grid)
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
     for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
@@ -940,6 +966,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t4 = performance.now();
   // Pass 3: drainage (higher-resolution flow accumulation than the high-res grid)
   computeRegionalDrainage(elevGrid);
 
@@ -951,6 +978,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
   // nearestSampleHR produced 128×128 blocks of uniform stream order,
   // causing discontinuous WTD/saturation/color steps at grid boundaries.
 
+  const _t5 = performance.now();
   // Pass 4: refine substrate / saturation / water table from the high-res base.
   //         Ridge cells keep high-res values; channels get wetter and finer.
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
@@ -959,6 +987,7 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t6 = performance.now();
   // Pass 5a: refine flora from the (possibly drainage-modified) state.
   //          Sets canopy, groundCover — these are the "dry" values before
   //          flood modulation. Must run before deriveWTDWater.
@@ -968,11 +997,13 @@ function generateRegionalDetailHiRes(centerX, centerY) {
     }
   }
 
+  const _t7 = performance.now();
   // Pass 5b: derive water state from WTD (replaces computeStandingWater).
   //          Reads WTD (set in Pass 4) and canopy (set in Pass 5a).
   //          Modulates canopy downward for flooded zones.
   deriveWTDWater(state.regionalCells, REGIONAL_SIZE, REGIONAL_SIZE);
 
+  const _t8 = performance.now();
   // Pass 5c: derive terrain type through the canonical function.
   //          Reads the flood-modulated canopy to determine coverType.
   for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
@@ -980,6 +1011,19 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       deriveRegionalTerrainType(state.regionalCells[rx][ry]);
     }
   }
+
+  const _t9 = performance.now();
+  console.log(`Regional gen HiRes breakdown (ms):`,
+    `elev=${(_t1-_t0).toFixed(1)}`,
+    `drainDir=${(_t2-_t1).toFixed(1)}`,
+    `cellBuild=${(_t3-_t2).toFixed(1)}`,
+    `slopes=${(_t4-_t3).toFixed(1)}`,
+    `drainage=${(_t5-_t4).toFixed(1)}`,
+    `substrate=${(_t6-_t5).toFixed(1)}`,
+    `flora=${(_t7-_t6).toFixed(1)}`,
+    `wtdWater=${(_t8-_t7).toFixed(1)}`,
+    `terrain=${(_t9-_t8).toFixed(1)}`,
+    `total=${(_t9-_t0).toFixed(1)}`);
 
   printRegionalDiagnostic();
 }

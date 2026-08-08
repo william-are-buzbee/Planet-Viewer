@@ -122,7 +122,7 @@ export const state = {
 import { generatePlanet } from './planet-gen.js';
 import { generateHighResSurface, yieldFrame, updateProgress, hideProgress } from './hires-gen.js';
 import { render, renderGlobe, renderMollweide } from './planet-render.js';
-import { initUI } from './ui.js';
+import { initUI, clearRegionCache } from './ui.js';
 
 // ── Generation orchestration ──
 let _generating = false;
@@ -139,6 +139,9 @@ async function runGeneration() {
   genBtn.disabled = true;
   const seed = parseInt(seedInput.value, 10) || 0;
   statusText.textContent = 'Generating…';
+
+  // Clear stale cached regions — planet is changing
+  clearRegionCache();
 
   // Close any open regional view (planet is changing)
   if (state.selectedRegion) {
