@@ -155,7 +155,10 @@ function showRegionalView(planetX, planetY) {
     generateRegionalDetail(planetX, planetY);
     const t1 = performance.now();
     cacheRegion(planetX, planetY, state.regionalCells);
+    const r0 = performance.now(); // Session 28: regional render timing
     renderRegionalMap(regionalOverlaySelect.value);
+    const r1 = performance.now();
+    console.log(`Regional render: ${(r1-r0).toFixed(1)}ms`);
     statusText.textContent = `Regional generated in ${(t1 - t0).toFixed(0)} ms`;
   }
 
@@ -507,6 +510,7 @@ function captureSnapshot() {
 // ══════════════════════════════════════════════════════════════════
 
 function handleRegionalPan(key) {
+  const k0 = performance.now(); // Session 28: arrow key timing
   // Cancel any background precomputation — user is actively navigating
   cancelPrecomputation();
 
@@ -546,6 +550,8 @@ function handleRegionalPan(key) {
     startRegionGeneration(_regionPendingTarget.cx, _regionPendingTarget.cy);
   }
   // If already generating, the completion handler will pick up the latest _regionPendingTarget
+  const k1 = performance.now(); // Session 28: arrow key timing
+  console.log(`Arrow key (sync part): ${(k1-k0).toFixed(1)}ms`);
 }
 
 function updateRegionLabel(cx, cy) {
@@ -577,7 +583,11 @@ function startRegionGeneration(cx, cy) {
     generateRegionalDetail(cx, cy);
     const t1 = performance.now();
     cacheRegion(cx, cy, state.regionalCells);
+    const r0 = performance.now(); // Session 28: regional render timing
     renderRegionalMap(regionalOverlaySelect.value);
+    const r1 = performance.now();
+    console.log(`Regional render: ${(r1-r0).toFixed(1)}ms`);
+    console.log(`Arrow key total (deferred): gen=${(t1-t0).toFixed(1)}ms render=${(r1-r0).toFixed(1)}ms total=${(r1-t0).toFixed(1)}ms`);
     statusText.textContent = `Regional panned in ${(t1 - t0).toFixed(0)} ms`;
     _regionIsGenerating = false;
     updateInfoPanel();

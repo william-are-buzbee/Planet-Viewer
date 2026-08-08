@@ -605,15 +605,39 @@ async function generateHighResSurface(seed) {
     return;
   }
 
+  // ── Session 28: hi-res generation timing ──
+  console.log('=== HI-RES GENERATION ===');
+  const rowsPerChunk = Math.max(1, Math.floor(state.HR_H / 24));
+  const numYields = Math.ceil(state.HR_H / rowsPerChunk);
+  console.log(`forEachHRRow: ${rowsPerChunk} rows/chunk, ${numYields} yields per step, est yield overhead: ${numYields * 4}ms/step`);
+
+  const h0 = performance.now();
   await forEachHRRow(hy => stepHR1_elevationRow(hy, seed), 'Interpolating elevation…', 0, 12);
+  const h1 = performance.now();
   await forEachHRRow(hy => stepHR1b_drainDirRow(hy),       'Computing drain dirs…', 12, 16);
+  const h1b = performance.now();
   await forEachHRRow(hy => stepHR2_atmosphereRow(hy),      'Interpolating atmosphere…', 16, 28);
+  const h2 = performance.now();
   await forEachHRRow(hy => stepHR3_substrateRow(hy, seed), 'Computing substrate…', 28, 42);
+  const h3 = performance.now();
   await forEachHRRow(hy => stepHR4_waterTableRow(hy),      'Computing water table…', 42, 52);
+  const h4 = performance.now();
   await stepHR5_drainage();                                 // 52 → 72
+  const h5 = performance.now();
   await forEachHRRow(hy => stepHR6_floraRow(hy),           'Computing flora…', 72, 82);
+  const h6 = performance.now();
   await forEachHRRow(hy => stepHR7_terrainRow(hy),         'Deriving terrain…', 82, 88);
+  const h7 = performance.now();
   await forEachHRRow(hy => stepHR8_colorRow(hy),           'Computing colors…', 88, 99);
+  const h8 = performance.now();
+
+  console.log(`HiRes gen (ms): ` +
+    `HR1=${(h1-h0).toFixed(1)} HR1b=${(h1b-h1).toFixed(1)} ` +
+    `HR2=${(h2-h1b).toFixed(1)} HR3=${(h3-h2).toFixed(1)} ` +
+    `HR4=${(h4-h3).toFixed(1)} HR5=${(h5-h4).toFixed(1)} ` +
+    `HR6=${(h6-h5).toFixed(1)} HR7=${(h7-h6).toFixed(1)} ` +
+    `HR8=${(h8-h7).toFixed(1)} ` +
+    `TOTAL=${(h8-h0).toFixed(1)}`);
 }
 
 export { generateHighResSurface, yieldFrame, updateProgress, hideProgress };

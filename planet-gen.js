@@ -58,20 +58,38 @@ function generatePlanet(seed) {
     };
   }
 
+  // ── Session 28: planet generation timing ──
+  console.log('=== PLANET GENERATION ===');
+  const p0 = performance.now();
   // Step 1: Plates
   step1_generatePlates(seed, rng);
+  const p1 = performance.now();
   // Step 1b: Generate geological seed points (mountains, arcs, rifts)
   step1b_generateGeoSeeds(seed, rng);
+  const p1b = performance.now();
   // Step 2: Elevation
   step2_computeElevation(seed, rng);
+  const p2 = performance.now();
   // Step 3: Minerals
   step3_computeMinerals(seed, rng);
+  const p3 = performance.now();
   // Step 4: Atmosphere
   step4_computeAtmosphere(seed, rng);
+  const p4 = performance.now();
   // Step 5: Flora
   step5_computeFlora();
+  const p5 = performance.now();
   // Step 5b: Terrain + cover type (via the canonical deriveTerrainAndCover)
   step5b_deriveTerrainType();
+  const p5b = performance.now();
+
+  console.log(`Planet gen (ms): ` +
+    `step1=${(p1-p0).toFixed(1)} step1b=${(p1b-p1).toFixed(1)} ` +
+    `step2=${(p2-p1b).toFixed(1)} step3=${(p3-p2).toFixed(1)} ` +
+    `step4=${(p4-p3).toFixed(1)} step5=${(p5-p4).toFixed(1)} ` +
+    `step5b=${(p5b-p5).toFixed(1)} ` +
+    `TOTAL=${(p5b-p0).toFixed(1)}`);
+
   // Diagnostic
   printWeatherDiagnostic();
   printPrecipDiagnostic();

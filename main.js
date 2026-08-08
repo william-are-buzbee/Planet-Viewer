@@ -167,6 +167,8 @@ async function runGeneration() {
     updateProgress('Simulating atmosphere…', 0);
     await yieldFrame();
 
+    const tStart = performance.now();
+
     const t0 = performance.now();
     generatePlanet(seed);
     const t1 = performance.now();
@@ -181,6 +183,35 @@ async function runGeneration() {
     if (state.currentView === 'globe') renderGlobe();
     if (state.currentView === 'mollweide') renderMollweide();
     const t3 = performance.now();
+
+    const tEnd = performance.now();
+
+    // ── Session 28: Grid sizes ──
+    console.log('=== GRID SIZES ===');
+    console.log(`Planet: W=${state.HR_W / state.hiResMultiplier} H=${state.HR_H / state.hiResMultiplier} TOTAL=${(state.HR_W / state.hiResMultiplier) * (state.HR_H / state.hiResMultiplier)}`);
+    console.log(`HiRes multiplier: ${state.hiResMultiplier}`);
+    console.log(`HiRes: HR_W=${state.HR_W} HR_H=${state.HR_H} HR_TOTAL=${state.HR_TOTAL}`);
+
+    // ── Session 28: Top-level timing ──
+    console.log(`=== TOTAL GENERATION: ${(tEnd - tStart).toFixed(0)}ms ===`);
+    console.log(`  Planet gen: ${(t1 - t0).toFixed(0)}ms`);
+    console.log(`  HiRes gen: ${(t2 - t1).toFixed(0)}ms`);
+    console.log(`  Render: ${(t3 - t2).toFixed(0)}ms`);
+
+    // ── Session 28: Memory snapshot ──
+    if (performance.memory) {
+      console.log('=== MEMORY ===');
+      console.log(`Heap used: ${(performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1)}MB`);
+      console.log(`Heap total: ${(performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(1)}MB`);
+    }
+    // Typed array memory estimate
+    if (state.hiResData) {
+      const f32Count = 19; // elevation, precipitation, groundwater, waterAvail, volcanism, iron, copper, manganese, windU, windV, windSpeed, temperature, sst, grainSize, waterTableDepth, saturation, groundCover, canopyDensity, organicContent + chemoCrust + drainDirX + drainDirY = ~22
+      const u8Count = 9;   // isLand, isShallowWater, isDeepWater, isFreezing, floraType, terrainType, coverType, streamOrder, colorR, colorG, colorB = ~11
+      const u16Count = 1;  // plateId
+      const hrBytes = state.HR_TOTAL * (22 * 4 + 11 * 1 + 1 * 2);
+      console.log(`HiRes typed arrays: ~${(hrBytes / 1024 / 1024).toFixed(1)}MB (${state.HR_TOTAL} cells × ~101 bytes)`);
+    }
 
     hideProgress();
     const hrNote = state.hiResData ? `, ${state.HR_W}×${state.HR_H} surface in ${(t2 - t1).toFixed(0)} ms` : '';
