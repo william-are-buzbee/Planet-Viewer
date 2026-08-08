@@ -368,31 +368,44 @@ function generateRegionalDetailLowRes(centerX, centerY) {
       const elev = baseElev + detail * detailAmp + channelOffset;
       elevGrid[idx] = elev;
 
+      // ── Batched planetary grid sampling: compute corners once ──
+      // Eliminates 14 redundant floor/mod/clamp per cell for the 15 bilinear calls.
+      const px0 = Math.floor(px), py0 = Math.floor(py);
+      const pfx = px - px0, pfy = py - py0;
+      const pc00 = getPlanetaryCell(px0, py0);
+      const pc10 = getPlanetaryCell(px0 + 1, py0);
+      const pc01 = getPlanetaryCell(px0, py0 + 1);
+      const pc11 = getPlanetaryCell(px0 + 1, py0 + 1);
+      const pw00 = (1 - pfx) * (1 - pfy);
+      const pw10 = pfx * (1 - pfy);
+      const pw01 = (1 - pfx) * pfy;
+      const pw11 = pfx * pfy;
+
       const cell = {
         rx, ry,
         worldX, worldY,
         baseElevation: elev,
         elevation: elev,
         isLand: elev > 0,
-        // planetary-sampled fields
-        precipitation: bilinearInterpolate(px, py, c => c.precipitation),
-        groundwater: bilinearInterpolate(px, py, c => c.groundwater),
-        waterAvailability: bilinearInterpolate(px, py, c => c.waterAvailability),
-        atmosphericMoisture: bilinearInterpolate(px, py, c => c.atmosphericMoisture),
-        temperature: bilinearInterpolate(px, py, c => c.temperature),
-        drainage: bilinearInterpolate(px, py, c => c.drainage),
-        windSpeed: bilinearInterpolate(px, py, c => c.windSpeed),
-        sst: bilinearInterpolate(px, py, c => c.sst),
-        volcanism: bilinearInterpolate(px, py, c => c.volcanism || 0), // R1-FIX3: needed for unified chemoFitness
+        // planetary-sampled fields (batched inline bilinear)
+        precipitation: pc00.precipitation*pw00 + pc10.precipitation*pw10 + pc01.precipitation*pw01 + pc11.precipitation*pw11,
+        groundwater: pc00.groundwater*pw00 + pc10.groundwater*pw10 + pc01.groundwater*pw01 + pc11.groundwater*pw11,
+        waterAvailability: pc00.waterAvailability*pw00 + pc10.waterAvailability*pw10 + pc01.waterAvailability*pw01 + pc11.waterAvailability*pw11,
+        atmosphericMoisture: pc00.atmosphericMoisture*pw00 + pc10.atmosphericMoisture*pw10 + pc01.atmosphericMoisture*pw01 + pc11.atmosphericMoisture*pw11,
+        temperature: pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11,
+        drainage: pc00.drainage*pw00 + pc10.drainage*pw10 + pc01.drainage*pw01 + pc11.drainage*pw11,
+        windSpeed: pc00.windSpeed*pw00 + pc10.windSpeed*pw10 + pc01.windSpeed*pw01 + pc11.windSpeed*pw11,
+        sst: pc00.sst*pw00 + pc10.sst*pw10 + pc01.sst*pw01 + pc11.sst*pw11,
+        volcanism: (pc00.volcanism||0)*pw00 + (pc10.volcanism||0)*pw10 + (pc01.volcanism||0)*pw01 + (pc11.volcanism||0)*pw11, // R1-FIX3: needed for unified chemoFitness
         minerals: {
-          iron: bilinearInterpolate(px, py, c => c.minerals.iron),
-          copper: bilinearInterpolate(px, py, c => c.minerals.copper),
-          manganese: bilinearInterpolate(px, py, c => c.minerals.manganese),
+          iron: pc00.minerals.iron*pw00 + pc10.minerals.iron*pw10 + pc01.minerals.iron*pw01 + pc11.minerals.iron*pw11,
+          copper: pc00.minerals.copper*pw00 + pc10.minerals.copper*pw10 + pc01.minerals.copper*pw01 + pc11.minerals.copper*pw11,
+          manganese: pc00.minerals.manganese*pw00 + pc10.minerals.manganese*pw10 + pc01.minerals.manganese*pw01 + pc11.minerals.manganese*pw11,
         },
         grainSize: 0.3,
         baseGrainSize: 0.3,
-        windU: bilinearInterpolate(px, py, c => c.windU),
-        windV: bilinearInterpolate(px, py, c => c.windV),
+        windU: pc00.windU*pw00 + pc10.windU*pw10 + pc01.windU*pw01 + pc11.windU*pw11,
+        windV: pc00.windV*pw00 + pc10.windV*pw10 + pc01.windV*pw01 + pc11.windV*pw11,
         currentSpeed: 0,
         currentU: 0,
         currentV: 0,
@@ -873,24 +886,40 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         }
       }
 
-      // Fields the high-res grid doesn't carry stay sampled from the low-res
-      // grid so the non-high-res overlays (moisture, temperature, currents,
-      // wind, etc.) keep working exactly as before.
+      // ── Batched planetary grid sampling: compute corners once ──
+      // Eliminates 7 redundant floor/mod/clamp per cell for the 8 remaining
+      // planetary bilinear calls (waterAvailability, atmosphericMoisture,
+      // temperature, drainage, windSpeed, sst, windU, windV).
+      const px0 = Math.floor(px), py0 = Math.floor(py);
+      const pfx = px - px0, pfy = py - py0;
+      const pwx0 = ((Math.round(px0) % W) + W) % W;
+      const pwx1 = ((Math.round(px0 + 1) % W) + W) % W;
+      const pwy0 = clamp(Math.round(py0), 0, H - 1);
+      const pwy1 = clamp(Math.round(py0 + 1), 0, H - 1);
+      const pc00 = state.cells[pwy0 * W + pwx0];
+      const pc10 = state.cells[pwy0 * W + pwx1];
+      const pc01 = state.cells[pwy1 * W + pwx0];
+      const pc11 = state.cells[pwy1 * W + pwx1];
+      const pw00 = (1 - pfx) * (1 - pfy);
+      const pw10 = pfx * (1 - pfy);
+      const pw01 = (1 - pfx) * pfy;
+      const pw11 = pfx * pfy;
+
       const cell = {
         rx, ry,
         worldX, worldY,
         baseElevation: elev,
         elevation: elev,
         isLand: elev > 0,
-        // planetary-sampled atmospheric fields (not present at high-res)
+        // planetary-sampled atmospheric fields (batched inline bilinear)
         precipitation: hrPrecip,
         groundwater: hrGW,
-        waterAvailability: bilinearInterpolate(px, py, c => c.waterAvailability),
-        atmosphericMoisture: bilinearInterpolate(px, py, c => c.atmosphericMoisture),
-        temperature: bilinearInterpolate(px, py, c => c.temperature),
-        drainage: bilinearInterpolate(px, py, c => c.drainage),
-        windSpeed: bilinearInterpolate(px, py, c => c.windSpeed),
-        sst: bilinearInterpolate(px, py, c => c.sst),
+        waterAvailability: pc00.waterAvailability*pw00 + pc10.waterAvailability*pw10 + pc01.waterAvailability*pw01 + pc11.waterAvailability*pw11,
+        atmosphericMoisture: pc00.atmosphericMoisture*pw00 + pc10.atmosphericMoisture*pw10 + pc01.atmosphericMoisture*pw01 + pc11.atmosphericMoisture*pw11,
+        temperature: pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11,
+        drainage: pc00.drainage*pw00 + pc10.drainage*pw10 + pc01.drainage*pw01 + pc11.drainage*pw11,
+        windSpeed: pc00.windSpeed*pw00 + pc10.windSpeed*pw10 + pc01.windSpeed*pw01 + pc11.windSpeed*pw11,
+        sst: pc00.sst*pw00 + pc10.sst*pw10 + pc01.sst*pw01 + pc11.sst*pw11,
         volcanism: hrVolc,
         minerals: {
           iron: hrIron,
@@ -899,8 +928,8 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         },
         grainSize: hrGrain,
         baseGrainSize: hrGrain,
-        windU: bilinearInterpolate(px, py, c => c.windU),
-        windV: bilinearInterpolate(px, py, c => c.windV),
+        windU: pc00.windU*pw00 + pc10.windU*pw10 + pc01.windU*pw01 + pc11.windU*pw11,
+        windV: pc00.windV*pw00 + pc10.windV*pw10 + pc01.windV*pw01 + pc11.windV*pw11,
         currentSpeed: 0,
         currentU: 0,
         currentV: 0,

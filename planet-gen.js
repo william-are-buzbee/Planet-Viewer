@@ -9,7 +9,8 @@ import { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, 
 import { step4_computeAtmosphere } from './planet-atmosphere.js';
 
 // ── Generation pipeline ──
-function generatePlanet(seed) {
+async function generatePlanet(seed) {
+  const statusEl = document.getElementById('statusText');
   const rng = mulberry32(seed);
   state.cells = new Array(TOTAL);
   for (let i = 0; i < TOTAL; i++) {
@@ -62,21 +63,31 @@ function generatePlanet(seed) {
   console.log('=== PLANET GENERATION ===');
   const p0 = performance.now();
   // Step 1: Plates
+  statusEl.textContent = 'Generating plates…';
+  await new Promise(r => setTimeout(r, 0));
   step1_generatePlates(seed, rng);
   const p1 = performance.now();
   // Step 1b: Generate geological seed points (mountains, arcs, rifts)
+  statusEl.textContent = 'Placing geological features…';
+  await new Promise(r => setTimeout(r, 0));
   step1b_generateGeoSeeds(seed, rng);
   const p1b = performance.now();
   // Step 2: Elevation
+  statusEl.textContent = 'Computing elevation…';
+  await new Promise(r => setTimeout(r, 0));
   step2_computeElevation(seed, rng);
   const p2 = performance.now();
   // Step 3: Minerals
+  statusEl.textContent = 'Computing minerals…';
+  await new Promise(r => setTimeout(r, 0));
   step3_computeMinerals(seed, rng);
   const p3 = performance.now();
-  // Step 4: Atmosphere
-  step4_computeAtmosphere(seed, rng);
+  // Step 4: Atmosphere (async — yields internally between sub-phases)
+  statusEl.textContent = 'Computing atmosphere…';
+  await new Promise(r => setTimeout(r, 0));
+  await step4_computeAtmosphere(seed, rng);
   const p4 = performance.now();
-  // Step 5: Flora
+  // Steps 5, 5b are fast (<120ms combined), no yield needed
   step5_computeFlora();
   const p5 = performance.now();
   // Step 5b: Terrain + cover type (via the canonical deriveTerrainAndCover)

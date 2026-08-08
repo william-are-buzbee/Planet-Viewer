@@ -85,12 +85,12 @@ export const state = {
     currentCoriolisStrength: 0.15,
     currentAdvectionRate: 0.02,
     currentFriction: 0.12,
-    currentIterations: 50,
+    currentIterations: 25,
     maxCurrentSpeed: 3.0,
-    sstAdvectionIterations: 35,
+    sstAdvectionIterations: 18,
     sstMixRate: 0.1,
     upwellingCooling: 0.15,
-    moistureIterations: 70,
+    moistureIterations: 35,
     thermalEvapFactor: 0.18,
     windEvapFactor: 0.10,
     oroFactor: 0.4,
@@ -170,7 +170,7 @@ async function runGeneration() {
     const tStart = performance.now();
 
     const t0 = performance.now();
-    generatePlanet(seed);
+    await generatePlanet(seed);
     const t1 = performance.now();
 
     await generateHighResSurface(seed);

@@ -50,7 +50,7 @@ function hideProgress() {
 // Run `fn(hy)` for every high-res row, yielding periodically so the
 // progress bar animates. Spreads `label` progress across [pctStart,pctEnd].
 async function forEachHRRow(fn, label, pctStart, pctEnd) {
-  const rowsPerChunk = Math.max(1, Math.floor(state.HR_H / 24));
+  const rowsPerChunk = 128;  // was ~42 (HR_H/24); reduces yield overhead from ~800ms to ~250ms
   for (let hy = 0; hy < state.HR_H; hy += rowsPerChunk) {
     const end = Math.min(state.HR_H, hy + rowsPerChunk);
     for (let y = hy; y < end; y++) fn(y);
@@ -69,11 +69,26 @@ function hrSphere(hx, hy) {
 
 function stepHR1_elevationRow(hy, seed) {
   const ly = hy / state.hiResMultiplier;
+  // Precompute y-axis corners (constant for the whole row)
+  const y0 = Math.floor(ly);
+  const fy = ly - y0;
+  const wy0 = clamp(Math.floor(ly), 0, H - 1);
+  const wy1 = clamp(y0 + 1, 0, H - 1);
+  const row0 = wy0 * W;
+  const row1 = wy1 * W;
+  const omy = 1 - fy;
+
   for (let hx = 0; hx < state.HR_W; hx++) {
     const hi = hy * state.HR_W + hx;
     const lx = hx / state.hiResMultiplier;
 
-    const baseElev = bilinearInterpolate(lx, ly, c => c.elevation);
+    // Inline bilinear elevation sampling (was bilinearInterpolate call)
+    const x0 = Math.floor(lx);
+    const fx = lx - x0;
+    const wx0 = ((x0 % W) + W) % W;
+    const wx1 = ((x0 + 1) % W + W) % W;
+    const baseElev = state.cells[row0+wx0].elevation*(1-fx)*omy + state.cells[row0+wx1].elevation*fx*omy
+                   + state.cells[row1+wx0].elevation*(1-fx)*fy   + state.cells[row1+wx1].elevation*fx*fy;
     const s = hrSphere(hx, hy);
 
     // Multi-octave coastline noise (only near sea level)
@@ -142,31 +157,56 @@ function stepHR1b_drainDirRow(hy) {
 }
 
 // ── Step HR2: interpolate atmospheric / mineral fields ──
+// Optimization 5: compute planetary grid corners and weights ONCE per cell,
+// then inline all field reads. Eliminates 11 redundant floor/mod/clamp
+// computations per cell × 2.1M cells.
 function stepHR2_atmosphereRow(hy) {
   const ly = hy / state.hiResMultiplier;
-  const lcy = Math.min(H - 1, Math.floor(ly));
+  const y0 = Math.floor(ly);
+  const fy = ly - y0;
+  const wy0 = clamp(y0, 0, H - 1);
+  const wy1 = clamp(y0 + 1, 0, H - 1);
+  const row0 = wy0 * W;
+  const row1 = wy1 * W;
+  const omy = 1 - fy;
+
   for (let hx = 0; hx < state.HR_W; hx++) {
     const hi = hy * state.HR_W + hx;
     const lx = hx / state.hiResMultiplier;
 
-    state.hiResData.precipitation[hi] = bilinearInterpolate(lx, ly, c => c.precipitation);
-    state.hiResData.groundwater[hi]   = bilinearInterpolate(lx, ly, c => c.groundwater);
-    state.hiResData.waterAvail[hi]    = bilinearInterpolate(lx, ly, c => c.waterAvailability || 0);
-    state.hiResData.volcanism[hi]     = bilinearInterpolate(lx, ly, c => c.volcanism || 0);
-    state.hiResData.iron[hi]          = bilinearInterpolate(lx, ly, c => c.minerals.iron);
-    state.hiResData.copper[hi]        = bilinearInterpolate(lx, ly, c => c.minerals.copper);
-    state.hiResData.manganese[hi]     = bilinearInterpolate(lx, ly, c => c.minerals.manganese);
-    state.hiResData.windU[hi]         = bilinearInterpolate(lx, ly, c => c.windU || 0);
-    state.hiResData.windV[hi]         = bilinearInterpolate(lx, ly, c => c.windV || 0);
-    state.hiResData.windSpeed[hi]     = bilinearInterpolate(lx, ly, c => c.windSpeed || 0);
-    state.hiResData.temperature[hi]   = bilinearInterpolate(lx, ly, c => c.temperature || 0);
-    state.hiResData.sst[hi]           = bilinearInterpolate(lx, ly, c => c.sst || 0);
+    // Compute 4 corner cells and bilinear weights ONCE
+    const x0 = Math.floor(lx);
+    const fx = lx - x0;
+    const wx0 = ((x0 % W) + W) % W;
+    const wx1 = ((x0 + 1) % W + W) % W;
+
+    const c00 = state.cells[row0 + wx0];
+    const c10 = state.cells[row0 + wx1];
+    const c01 = state.cells[row1 + wx0];
+    const c11 = state.cells[row1 + wx1];
+
+    const w00 = (1 - fx) * omy;
+    const w10 = fx * omy;
+    const w01 = (1 - fx) * fy;
+    const w11 = fx * fy;
+
+    // Inline bilinear interpolation for all 12 continuous fields
+    state.hiResData.precipitation[hi] = c00.precipitation*w00 + c10.precipitation*w10 + c01.precipitation*w01 + c11.precipitation*w11;
+    state.hiResData.groundwater[hi]   = c00.groundwater*w00 + c10.groundwater*w10 + c01.groundwater*w01 + c11.groundwater*w11;
+    state.hiResData.waterAvail[hi]    = (c00.waterAvailability||0)*w00 + (c10.waterAvailability||0)*w10 + (c01.waterAvailability||0)*w01 + (c11.waterAvailability||0)*w11;
+    state.hiResData.volcanism[hi]     = (c00.volcanism||0)*w00 + (c10.volcanism||0)*w10 + (c01.volcanism||0)*w01 + (c11.volcanism||0)*w11;
+    state.hiResData.iron[hi]          = c00.minerals.iron*w00 + c10.minerals.iron*w10 + c01.minerals.iron*w01 + c11.minerals.iron*w11;
+    state.hiResData.copper[hi]        = c00.minerals.copper*w00 + c10.minerals.copper*w10 + c01.minerals.copper*w01 + c11.minerals.copper*w11;
+    state.hiResData.manganese[hi]     = c00.minerals.manganese*w00 + c10.minerals.manganese*w10 + c01.minerals.manganese*w01 + c11.minerals.manganese*w11;
+    state.hiResData.windU[hi]         = (c00.windU||0)*w00 + (c10.windU||0)*w10 + (c01.windU||0)*w01 + (c11.windU||0)*w11;
+    state.hiResData.windV[hi]         = (c00.windV||0)*w00 + (c10.windV||0)*w10 + (c01.windV||0)*w01 + (c11.windV||0)*w11;
+    state.hiResData.windSpeed[hi]     = (c00.windSpeed||0)*w00 + (c10.windSpeed||0)*w10 + (c01.windSpeed||0)*w01 + (c11.windSpeed||0)*w11;
+    state.hiResData.temperature[hi]   = (c00.temperature||0)*w00 + (c10.temperature||0)*w10 + (c01.temperature||0)*w01 + (c11.temperature||0)*w11;
+    state.hiResData.sst[hi]           = (c00.sst||0)*w00 + (c10.sst||0)*w10 + (c01.sst||0)*w01 + (c11.sst||0)*w11;
 
     // Freezing + plate id carried from nearest low-res cell (discrete fields)
-    const lcx = ((Math.floor(lx) % W) + W) % W;
-    const lcell = state.cells[lcy * W + lcx];
-    state.hiResData.isFreezing[hi] = lcell.isFreezing ? 1 : 0;
-    state.hiResData.plateId[hi]    = lcell.plateId || 0;
+    state.hiResData.isFreezing[hi] = c00.isFreezing ? 1 : 0;
+    state.hiResData.plateId[hi]    = c00.plateId || 0;
   }
 }
 
@@ -607,7 +647,7 @@ async function generateHighResSurface(seed) {
 
   // ── Session 28: hi-res generation timing ──
   console.log('=== HI-RES GENERATION ===');
-  const rowsPerChunk = Math.max(1, Math.floor(state.HR_H / 24));
+  const rowsPerChunk = 128;
   const numYields = Math.ceil(state.HR_H / rowsPerChunk);
   console.log(`forEachHRRow: ${rowsPerChunk} rows/chunk, ${numYields} yields per step, est yield overhead: ${numYields * 4}ms/step`);
 

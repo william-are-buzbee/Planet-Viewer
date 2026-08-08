@@ -6,7 +6,7 @@ import { state } from './main.js';
 import { W, H, TOTAL, clamp, wrapX, smoothstep } from './core-math.js';
 
 // ── Step 4: Hydrological System ──
-function step4_computeAtmosphere(seed, rng) {
+async function step4_computeAtmosphere(seed, rng) {
   const statusEl = document.getElementById('statusText');
 
   // ── Step 4a: Wind Vector Field ──
@@ -126,6 +126,7 @@ function step4_computeAtmosphere(seed, rng) {
 
   // ── Step 4b: Ocean Currents ──
   statusEl.textContent = 'Computing ocean currents…';
+  await new Promise(r => setTimeout(r, 0));
 
   const numCurrentIter = Math.round(state.params.currentIterations);
   for (let iter = 0; iter < numCurrentIter; iter++) {
@@ -288,6 +289,7 @@ function step4_computeAtmosphere(seed, rng) {
 
   // ── Step 4c: Moisture Advection & Precipitation ──
   statusEl.textContent = 'Running precipitation model…';
+  await new Promise(r => setTimeout(r, 0));
 
   const moisture = new Float32Array(TOTAL);
   const precipAccum = new Float32Array(TOTAL);
@@ -469,6 +471,7 @@ function step4_computeAtmosphere(seed, rng) {
 
   // ── Step 4d: Groundwater ──
   statusEl.textContent = 'Computing groundwater…';
+  await new Promise(r => setTimeout(r, 0));
 
   for (let i = 0; i < TOTAL; i++) {
     const c = state.cells[i];
@@ -490,6 +493,7 @@ function step4_computeAtmosphere(seed, rng) {
 
   // ── Step 4e: Drainage Accumulation ──
   statusEl.textContent = 'Computing drainage…';
+  await new Promise(r => setTimeout(r, 0));
 
   const landIndices = [];
   for (let i = 0; i < TOTAL; i++) {
