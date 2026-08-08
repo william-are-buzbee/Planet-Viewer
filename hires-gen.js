@@ -99,6 +99,48 @@ function stepHR1_elevationRow(hy, seed) {
   }
 }
 
+// ── Step HR1b: precompute drain direction from wide-window gradient ──
+// Replicates the regional Pass 1b wide-window gradient algorithm at hi-res.
+// Regional gen looks this up via bilinearSampleHR instead of computing 8
+// bilinear elevation samples per cell, saving ~75% of Pass 1b sampling cost.
+function stepHR1b_drainDirRow(hy) {
+  const GRAD_RADIUS = 3;  // integer cell radius (matches GRAD_RADIUS_HR=3.0 in regional)
+  const gradDx = [0, 1, 1, 1, 0, -1, -1, -1];
+  const gradDy = [-1, -1, 0, 1, 1, 1, 0, -1];
+  const elev = state.hiResData.elevation;
+  const HR_W = state.HR_W, HR_H = state.HR_H;
+
+  for (let hx = 0; hx < HR_W; hx++) {
+    const hi = hy * HR_W + hx;
+
+    if (elev[hi] <= 0) {
+      // Ocean: drain southward (matches regional convention)
+      state.hiResData.drainDirX[hi] = 0;
+      state.hiResData.drainDirY[hi] = 1;
+      continue;
+    }
+
+    const centerElev = elev[hi];
+    let gx = 0, gy = 0;
+
+    for (let d = 0; d < 8; d++) {
+      const sx = hx + gradDx[d] * GRAD_RADIUS;
+      const sy = hy + gradDy[d] * GRAD_RADIUS;
+      // Wrap x, clamp y (same convention as bilinearSampleHR)
+      const wx = ((sx % HR_W) + HR_W) % HR_W;
+      const wy = Math.max(0, Math.min(HR_H - 1, sy));
+      const sampleElev = elev[wy * HR_W + wx];
+      const diff = centerElev - sampleElev;
+      gx += gradDx[d] * diff;
+      gy += gradDy[d] * diff;
+    }
+
+    const gLen = Math.sqrt(gx * gx + gy * gy) || 1;
+    state.hiResData.drainDirX[hi] = gx / gLen;
+    state.hiResData.drainDirY[hi] = gy / gLen;
+  }
+}
+
 // ── Step HR2: interpolate atmospheric / mineral fields ──
 function stepHR2_atmosphereRow(hy) {
   const ly = hy / state.hiResMultiplier;
@@ -547,6 +589,10 @@ async function generateHighResSurface(seed) {
       coverType:       new Uint8Array(state.HR_TOTAL),
       streamOrder:     new Uint8Array(state.HR_TOTAL),
 
+      // Precomputed drain direction (wide-window gradient, for regional gen)
+      drainDirX:       new Float32Array(state.HR_TOTAL),
+      drainDirY:       new Float32Array(state.HR_TOTAL),
+
       // For rendering
       colorR:          new Uint8Array(state.HR_TOTAL),
       colorG:          new Uint8Array(state.HR_TOTAL),
@@ -559,8 +605,9 @@ async function generateHighResSurface(seed) {
     return;
   }
 
-  await forEachHRRow(hy => stepHR1_elevationRow(hy, seed), 'Interpolating elevation…', 0, 14);
-  await forEachHRRow(hy => stepHR2_atmosphereRow(hy),      'Interpolating atmosphere…', 14, 28);
+  await forEachHRRow(hy => stepHR1_elevationRow(hy, seed), 'Interpolating elevation…', 0, 12);
+  await forEachHRRow(hy => stepHR1b_drainDirRow(hy),       'Computing drain dirs…', 12, 16);
+  await forEachHRRow(hy => stepHR2_atmosphereRow(hy),      'Interpolating atmosphere…', 16, 28);
   await forEachHRRow(hy => stepHR3_substrateRow(hy, seed), 'Computing substrate…', 28, 42);
   await forEachHRRow(hy => stepHR4_waterTableRow(hy),      'Computing water table…', 42, 52);
   await stepHR5_drainage();                                 // 52 → 72

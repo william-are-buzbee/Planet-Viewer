@@ -149,8 +149,8 @@ function generateRegionalDetailLowRes(centerX, centerY) {
   // convergence perturbation stabilize before reaching the interior 512×512 region.
   const S_LR = REGIONAL_SIZE;
   const NN_LR = S_LR * S_LR;
-  const MARGIN_LR = 64;
-  const S_PAD_LR = S_LR + 2 * MARGIN_LR;  // 640
+  const MARGIN_LR = 4;
+  const S_PAD_LR = S_LR + 2 * MARGIN_LR;  // 520
   const NN_PAD_LR = S_PAD_LR * S_PAD_LR;
   const baseElevGridLR = new Float32Array(NN_LR);
   const elevGrid = new Float32Array(NN_LR);
@@ -216,22 +216,20 @@ function generateRegionalDetailLowRes(centerX, centerY) {
       drainDirXPadLR[idx] = gx / gLen;
       drainDirYPadLR[idx] = gy / gLen;
 
-      // Local 7×7 slope on the padded base elevation grid
-      let localGx = 0, localGy = 0, localWt = 0;
-      for (let ddy = -3; ddy <= 3; ddy++) {
-        for (let ddx = -3; ddx <= 3; ddx++) {
-          if (ddx === 0 && ddy === 0) continue;
-          const nrx = rx + ddx, nry = ry + ddy;
-          if (nrx < 0 || nrx >= S_PAD_LR || nry < 0 || nry >= S_PAD_LR) continue;
-          const w = 1.0 / Math.sqrt(ddx * ddx + ddy * ddy);
-          const diff = baseElevPadLR[idx] - baseElevPadLR[nry * S_PAD_LR + nrx];
-          localGx += ddx * diff * w;
-          localGy += ddy * diff * w;
-          localWt += w;
-        }
+      // 3×3 Sobel slope on the padded base elevation grid
+      let localGx = 0, localGy = 0;
+      if (rx > 0 && rx < S_PAD_LR - 1 && ry > 0 && ry < S_PAD_LR - 1) {
+        const rm = (ry - 1) * S_PAD_LR, r0 = ry * S_PAD_LR, rp = (ry + 1) * S_PAD_LR;
+        const xm = rx - 1, xp = rx + 1;
+        localGx = (baseElevPadLR[rm + xp] + 2 * baseElevPadLR[r0 + xp] + baseElevPadLR[rp + xp])
+                - (baseElevPadLR[rm + xm] + 2 * baseElevPadLR[r0 + xm] + baseElevPadLR[rp + xm]);
+        localGy = (baseElevPadLR[rp + xm] + 2 * baseElevPadLR[rp + rx] + baseElevPadLR[rp + xp])
+                - (baseElevPadLR[rm + xm] + 2 * baseElevPadLR[rm + rx] + baseElevPadLR[rm + xp]);
       }
-      if (localWt > 0) { localGx /= localWt; localGy /= localWt; }
-      const localSlopeMag = Math.sqrt(localGx * localGx + localGy * localGy);
+      // Scale Sobel magnitude to approximate 7×7 weighted-gradient magnitudes.
+      // Raw magnitude is kept for normalizing the direction vector.
+      const localSlopeRaw = Math.sqrt(localGx * localGx + localGy * localGy);
+      const localSlopeMag = localSlopeRaw * 0.4;
       slopeMagPadLR[idx] = localSlopeMag;
 
       // Blend: steep terrain uses local slope, flat terrain uses wide gradient
@@ -239,9 +237,9 @@ function generateRegionalDetailLowRes(centerX, centerY) {
       const STEEP_THRESH = 0.005;
       const t = clamp((localSlopeMag - FLAT_THRESH) / (STEEP_THRESH - FLAT_THRESH), 0, 1);
 
-      if (t > 0.01 && localSlopeMag > 0.0001) {
-        const nlx = localGx / localSlopeMag;
-        const nly = localGy / localSlopeMag;
+      if (t > 0.01 && localSlopeRaw > 0.0001) {
+        const nlx = localGx / localSlopeRaw;
+        const nly = localGy / localSlopeRaw;
 
         let bx = drainDirXPadLR[idx] * (1 - t) + nlx * t;
         let by = drainDirYPadLR[idx] * (1 - t) + nly * t;
@@ -529,8 +527,8 @@ function generateRegionalDetailHiRes(centerX, centerY) {
   // region. This ensures continuity when the user pans the regional map.
   const S = REGIONAL_SIZE;
   const NN = S * S;
-  const MARGIN = 64;
-  const S_PAD = S + 2 * MARGIN;  // 640
+  const MARGIN = 4;
+  const S_PAD = S + 2 * MARGIN;  // 520
   const NN_PAD = S_PAD * S_PAD;
   const baseElevGrid = new Float32Array(NN);
   const elevGrid = new Float32Array(NN);
@@ -575,11 +573,6 @@ function generateRegionalDetailHiRes(centerX, centerY) {
   const drainDirXPad = new Float32Array(NN_PAD);
   const drainDirYPad = new Float32Array(NN_PAD);
 
-  const GRAD_RADIUS_HR = 3.0;  // radius in hi-res cells (~3 × 39 km = ~117 km at 4×)
-  const GRAD_STEPS = 8;        // sample directions (N, NE, E, SE, S, SW, W, NW)
-  const gradDx = [0, 1, 1, 1, 0, -1, -1, -1];
-  const gradDy = [-1, -1, 0, 1, 1, 1, 0, -1];
-
   const slopeMagPad = new Float32Array(NN_PAD);
 
   for (let ry = 0; ry < S_PAD; ry++) {
@@ -591,43 +584,29 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         continue;
       }
 
-      // Compute hi-res coordinates for this padded cell
+      // Look up precomputed wide-window drain direction from hi-res grid
       const worldX = originWorldX + (rx - MARGIN);
       const worldY = originWorldY + (ry - MARGIN);
       const hx = (worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
       const hy = (worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-      const centerElev = baseElevPad[idx];
 
-      // Wide-window gradient from global hi-res elevation
-      let gx = 0, gy = 0;
-      for (let d = 0; d < GRAD_STEPS; d++) {
-        const sampleHx = hx + gradDx[d] * GRAD_RADIUS_HR;
-        const sampleHy = hy + gradDy[d] * GRAD_RADIUS_HR;
-        const sampleElev = bilinearSampleHR(state.hiResData.elevation, sampleHx, sampleHy, state.HR_W, state.HR_H);
-        const diff = centerElev - sampleElev;  // positive = downhill in that direction
-        gx += gradDx[d] * diff;
-        gy += gradDy[d] * diff;
-      }
-      const gLen = Math.sqrt(gx * gx + gy * gy) || 1;
-      drainDirXPad[idx] = gx / gLen;
-      drainDirYPad[idx] = gy / gLen;
+      drainDirXPad[idx] = bilinearSampleHR(state.hiResData.drainDirX, hx, hy, state.HR_W, state.HR_H);
+      drainDirYPad[idx] = bilinearSampleHR(state.hiResData.drainDirY, hx, hy, state.HR_W, state.HR_H);
 
-      // Local 7×7 slope on the padded base elevation grid
-      let localGx = 0, localGy = 0, localWt = 0;
-      for (let ddy = -3; ddy <= 3; ddy++) {
-        for (let ddx = -3; ddx <= 3; ddx++) {
-          if (ddx === 0 && ddy === 0) continue;
-          const nrx = rx + ddx, nry = ry + ddy;
-          if (nrx < 0 || nrx >= S_PAD || nry < 0 || nry >= S_PAD) continue;
-          const w = 1.0 / Math.sqrt(ddx * ddx + ddy * ddy);
-          const diff = baseElevPad[idx] - baseElevPad[nry * S_PAD + nrx];
-          localGx += ddx * diff * w;
-          localGy += ddy * diff * w;
-          localWt += w;
-        }
+      // 3×3 Sobel slope on the padded base elevation grid
+      let localGx = 0, localGy = 0;
+      if (rx > 0 && rx < S_PAD - 1 && ry > 0 && ry < S_PAD - 1) {
+        const rm = (ry - 1) * S_PAD, r0 = ry * S_PAD, rp = (ry + 1) * S_PAD;
+        const xm = rx - 1, xp = rx + 1;
+        localGx = (baseElevPad[rm + xp] + 2 * baseElevPad[r0 + xp] + baseElevPad[rp + xp])
+                - (baseElevPad[rm + xm] + 2 * baseElevPad[r0 + xm] + baseElevPad[rp + xm]);
+        localGy = (baseElevPad[rp + xm] + 2 * baseElevPad[rp + rx] + baseElevPad[rp + xp])
+                - (baseElevPad[rm + xm] + 2 * baseElevPad[rm + rx] + baseElevPad[rm + xp]);
       }
-      if (localWt > 0) { localGx /= localWt; localGy /= localWt; }
-      const localSlopeMag = Math.sqrt(localGx * localGx + localGy * localGy);
+      // Scale Sobel magnitude to approximate 7×7 weighted-gradient magnitudes.
+      // Raw magnitude is kept for normalizing the direction vector.
+      const localSlopeRaw = Math.sqrt(localGx * localGx + localGy * localGy);
+      const localSlopeMag = localSlopeRaw * 0.4;
       slopeMagPad[idx] = localSlopeMag;
 
       // Blend: steep terrain uses local slope, flat terrain uses wide gradient
@@ -635,9 +614,9 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       const STEEP_THRESH = 0.005;
       const t = clamp((localSlopeMag - FLAT_THRESH) / (STEEP_THRESH - FLAT_THRESH), 0, 1);
 
-      if (t > 0.01 && localSlopeMag > 0.0001) {
-        const nlx = localGx / localSlopeMag;
-        const nly = localGy / localSlopeMag;
+      if (t > 0.01 && localSlopeRaw > 0.0001) {
+        const nlx = localGx / localSlopeRaw;
+        const nly = localGy / localSlopeRaw;
 
         let bx = drainDirXPad[idx] * (1 - t) + nlx * t;
         let by = drainDirYPad[idx] * (1 - t) + nly * t;
@@ -787,51 +766,56 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       const elev = baseElev + detail * detailAmp + channelOffset;
       elevGrid[idx] = elev;
 
-      // ── Interpolated high-res physical base fields ──
-      const hrGrain    = bilinearSampleHR(state.hiResData.grainSize, hx, hy, state.HR_W, state.HR_H);
-      const hrSat      = bilinearSampleHR(state.hiResData.saturation, hx, hy, state.HR_W, state.HR_H);
-      const hrGCover   = bilinearSampleHR(state.hiResData.groundCover, hx, hy, state.HR_W, state.HR_H);
-      const hrCanopy   = bilinearSampleHR(state.hiResData.canopyDensity, hx, hy, state.HR_W, state.HR_H);
-      const hrChemo    = bilinearSampleHR(state.hiResData.chemoCrust, hx, hy, state.HR_W, state.HR_H);
-      const hrOrganic  = bilinearSampleHR(state.hiResData.organicContent, hx, hy, state.HR_W, state.HR_H);
-      const hrWTD      = bilinearSampleHR(state.hiResData.waterTableDepth, hx, hy, state.HR_W, state.HR_H);
-      const hrPrecip   = bilinearSampleHR(state.hiResData.precipitation, hx, hy, state.HR_W, state.HR_H);
-      const hrGW       = bilinearSampleHR(state.hiResData.groundwater, hx, hy, state.HR_W, state.HR_H);
-      const hrVolc     = bilinearSampleHR(state.hiResData.volcanism, hx, hy, state.HR_W, state.HR_H);
-      const hrIron     = bilinearSampleHR(state.hiResData.iron, hx, hy, state.HR_W, state.HR_H);
-      const hrCopper   = bilinearSampleHR(state.hiResData.copper, hx, hy, state.HR_W, state.HR_H);
-      const hrManganese= bilinearSampleHR(state.hiResData.manganese, hx, hy, state.HR_W, state.HR_H);
+      // ── Batched bilinear sampling: compute corners and weights ONCE ──
+      const HR_W = state.HR_W, HR_H = state.HR_H;
+      const bx0 = Math.floor(hx);
+      const by0 = Math.floor(hy);
+      const bfx = hx - bx0;
+      const bfy = hy - by0;
+      const bcx0 = ((bx0 % HR_W) + HR_W) % HR_W;
+      const bcx1 = ((bx0 + 1) % HR_W + HR_W) % HR_W;
+      const bcy0 = Math.max(0, Math.min(HR_H - 1, by0));
+      const bcy1 = Math.max(0, Math.min(HR_H - 1, by0 + 1));
+      const bi00 = bcy0 * HR_W + bcx0;
+      const bi10 = bcy0 * HR_W + bcx1;
+      const bi01 = bcy1 * HR_W + bcx0;
+      const bi11 = bcy1 * HR_W + bcx1;
+      const bw00 = (1 - bfx) * (1 - bfy);
+      const bw10 = bfx * (1 - bfy);
+      const bw01 = (1 - bfx) * bfy;
+      const bw11 = bfx * bfy;
+
+      // Inline bilinear reads for all continuous fields
+      const hrd = state.hiResData;
+      const hrGrain     = hrd.grainSize[bi00]*bw00 + hrd.grainSize[bi10]*bw10 + hrd.grainSize[bi01]*bw01 + hrd.grainSize[bi11]*bw11;
+      const hrSat       = hrd.saturation[bi00]*bw00 + hrd.saturation[bi10]*bw10 + hrd.saturation[bi01]*bw01 + hrd.saturation[bi11]*bw11;
+      const hrGCover    = hrd.groundCover[bi00]*bw00 + hrd.groundCover[bi10]*bw10 + hrd.groundCover[bi01]*bw01 + hrd.groundCover[bi11]*bw11;
+      const hrCanopy    = hrd.canopyDensity[bi00]*bw00 + hrd.canopyDensity[bi10]*bw10 + hrd.canopyDensity[bi01]*bw01 + hrd.canopyDensity[bi11]*bw11;
+      const hrChemo     = hrd.chemoCrust[bi00]*bw00 + hrd.chemoCrust[bi10]*bw10 + hrd.chemoCrust[bi01]*bw01 + hrd.chemoCrust[bi11]*bw11;
+      const hrOrganic   = hrd.organicContent[bi00]*bw00 + hrd.organicContent[bi10]*bw10 + hrd.organicContent[bi01]*bw01 + hrd.organicContent[bi11]*bw11;
+      const hrWTD       = hrd.waterTableDepth[bi00]*bw00 + hrd.waterTableDepth[bi10]*bw10 + hrd.waterTableDepth[bi01]*bw01 + hrd.waterTableDepth[bi11]*bw11;
+      const hrPrecip    = hrd.precipitation[bi00]*bw00 + hrd.precipitation[bi10]*bw10 + hrd.precipitation[bi01]*bw01 + hrd.precipitation[bi11]*bw11;
+      const hrGW        = hrd.groundwater[bi00]*bw00 + hrd.groundwater[bi10]*bw10 + hrd.groundwater[bi01]*bw01 + hrd.groundwater[bi11]*bw11;
+      const hrVolc      = hrd.volcanism[bi00]*bw00 + hrd.volcanism[bi10]*bw10 + hrd.volcanism[bi01]*bw01 + hrd.volcanism[bi11]*bw11;
+      const hrIron      = hrd.iron[bi00]*bw00 + hrd.iron[bi10]*bw10 + hrd.iron[bi01]*bw01 + hrd.iron[bi11]*bw11;
+      const hrCopper    = hrd.copper[bi00]*bw00 + hrd.copper[bi10]*bw10 + hrd.copper[bi01]*bw01 + hrd.copper[bi11]*bw11;
+      const hrManganese = hrd.manganese[bi00]*bw00 + hrd.manganese[bi10]*bw10 + hrd.manganese[bi01]*bw01 + hrd.manganese[bi11]*bw11;
 
       // R2-FIX1: probabilistic flora type sampling
-      // Instead of nearest-neighbor (which produces 128×128 blocks of uniform
-      // flora type), sample the four surrounding hi-res cells and pick the type
-      // with the highest bilinear weight, perturbed by noise for organic boundaries.
+      // Reuses corner indices computed above for bilinear batching.
       let hrFloraType;
       {
-        const x0 = Math.floor(hx), x1 = x0 + 1;
-        const y0 = Math.floor(hy), y1 = y0 + 1;
-        const fx = hx - x0;
-        const fy = hy - y0;
+        // Sample flora type at each corner (direct indexed access)
+        const t00 = hrd.floraType[bi00];
+        const t10 = hrd.floraType[bi10];
+        const t01 = hrd.floraType[bi01];
+        const t11 = hrd.floraType[bi11];
 
-        // Sample flora type at each corner
-        const t00 = nearestSampleHR(state.hiResData.floraType, x0, y0, state.HR_W, state.HR_H);
-        const t10 = nearestSampleHR(state.hiResData.floraType, x1, y0, state.HR_W, state.HR_H);
-        const t01 = nearestSampleHR(state.hiResData.floraType, x0, y1, state.HR_W, state.HR_H);
-        const t11 = nearestSampleHR(state.hiResData.floraType, x1, y1, state.HR_W, state.HR_H);
-
-        // R3-FIX1: ocean filter on flora sampling
-        // Sample elevation at each corner to identify ocean cells.
-        // Ocean corners (elevation <= 0) have their bilinear weight zeroed out
-        // so barren flora doesn't leak from ocean onto land cells.
-        const HR_W = state.HR_W, HR_H = state.HR_H;
-        const cx0 = ((x0 % HR_W) + HR_W) % HR_W;
-        const cx1 = ((x1 % HR_W) + HR_W) % HR_W;
-        const cy0 = Math.max(0, Math.min(HR_H - 1, y0));
-        const cy1 = Math.max(0, Math.min(HR_H - 1, y1));
-        const e00 = state.hiResData.elevation[cy0 * HR_W + cx0];
-        const e10 = state.hiResData.elevation[cy0 * HR_W + cx1];
-        const e01 = state.hiResData.elevation[cy1 * HR_W + cx0];
-        const e11 = state.hiResData.elevation[cy1 * HR_W + cx1];
+        // R3-FIX1: ocean filter — reuse corner elevation from same indices
+        const e00 = hrd.elevation[bi00];
+        const e10 = hrd.elevation[bi10];
+        const e01 = hrd.elevation[bi01];
+        const e11 = hrd.elevation[bi11];
 
         const isOcean00 = e00 <= 0;
         const isOcean10 = e10 <= 0;
@@ -839,24 +823,21 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         const isOcean11 = e11 <= 0;
 
         if (isOcean00 && isOcean10 && isOcean01 && isOcean11) {
-          // All four corners are ocean — cell is fully ocean
           hrFloraType = 'barren';
         } else {
           // Compute bilinear weights, zeroing ocean corners
-          let w00 = isOcean00 ? 0 : (1 - fx) * (1 - fy);
-          let w10 = isOcean10 ? 0 : fx * (1 - fy);
-          let w01 = isOcean01 ? 0 : (1 - fx) * fy;
-          let w11 = isOcean11 ? 0 : fx * fy;
+          let fw00 = isOcean00 ? 0 : bw00;
+          let fw10 = isOcean10 ? 0 : bw10;
+          let fw01 = isOcean01 ? 0 : bw01;
+          let fw11 = isOcean11 ? 0 : bw11;
 
-          // Renormalize weights so they sum to 1.0
-          const wSum = w00 + w10 + w01 + w11;
-          if (wSum > 0) {
-            w00 /= wSum; w10 /= wSum; w01 /= wSum; w11 /= wSum;
+          // Renormalize
+          const fwSum = fw00 + fw10 + fw01 + fw11;
+          if (fwSum > 0) {
+            fw00 /= fwSum; fw10 /= fwSum; fw01 /= fwSum; fw11 /= fwSum;
           }
-          // End R3-FIX1
 
-          // Fast path: all four land corners agree — no noise needed
-          // (only check non-ocean corners for agreement)
+          // Fast path: all land corners agree
           const landTypes = [];
           if (!isOcean00) landTypes.push(t00);
           if (!isOcean10) landTypes.push(t10);
@@ -867,21 +848,13 @@ function generateRegionalDetailHiRes(centerX, centerY) {
           if (allAgree) {
             hrFloraType = HR_FLORA_NAMES[landTypes[0]] || 'barren';
           } else {
-            // Boundary path: accumulate weights per type (ocean corners already zeroed)
+            // Boundary path: accumulate weights per type
             const typeWeights = new Map();
-            const corners = [
-              { type: t00, w: w00 },
-              { type: t10, w: w10 },
-              { type: t01, w: w01 },
-              { type: t11, w: w11 },
-            ];
-            for (const c of corners) {
-              if (c.w > 0) {
-                typeWeights.set(c.type, (typeWeights.get(c.type) || 0) + c.w);
-              }
-            }
+            if (fw00 > 0) typeWeights.set(t00, (typeWeights.get(t00) || 0) + fw00);
+            if (fw10 > 0) typeWeights.set(t10, (typeWeights.get(t10) || 0) + fw10);
+            if (fw01 > 0) typeWeights.set(t01, (typeWeights.get(t01) || 0) + fw01);
+            if (fw11 > 0) typeWeights.set(t11, (typeWeights.get(t11) || 0) + fw11);
 
-            // Add noise perturbation for organic boundaries
             let bestType = landTypes[0] || t00, bestWeight = -Infinity;
             for (const [type, weight] of typeWeights) {
               const perturbation = noise2D(
