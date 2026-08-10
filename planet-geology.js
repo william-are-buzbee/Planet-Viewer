@@ -761,4 +761,104 @@ function step3_computeMinerals(seed, rng) {
   }
 }
 
-export { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step3_computeMinerals };
+// ── Step 2b: Coastal Bathymetry Steepening ──
+function step2b_coastalBathymetry() {
+  const coastDist = new Int16Array(TOTAL).fill(-1);
+  const coastalHeight = new Float32Array(TOTAL);
+  const oceanicBase = state.params.oceanicBase;
+
+  // Phase 1: BFS distance-from-shore
+  const queue = [];
+  let head = 0;
+
+  // Seed BFS from land cells — mark adjacent ocean cells as coastDist=0
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (state.cells[i].elevation <= 0) continue; // not land
+
+      // Check all 8 neighbors
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const ny = y + dy;
+          if (ny < 0 || ny >= H) continue;
+          const nx = wrapX(x + dx);
+          const ni = ny * W + nx;
+          if (state.cells[ni].elevation > 0) continue; // also land
+          if (coastDist[ni] >= 0) {
+            // Already queued — take max coastalHeight
+            coastalHeight[ni] = Math.max(coastalHeight[ni], state.cells[i].elevation);
+            continue;
+          }
+          coastDist[ni] = 0;
+          coastalHeight[ni] = state.cells[i].elevation;
+          queue.push(ni);
+        }
+      }
+    }
+  }
+
+  // For coastDist=0 cells, we now have the max elevation of adjacent land.
+  // Propagate outward through ocean.
+  while (head < queue.length) {
+    const ci = queue[head++];
+    const cx = ci % W;
+    const cy = (ci / W) | 0;
+    const nextDist = coastDist[ci] + 1;
+    const ch = coastalHeight[ci];
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const ny = cy + dy;
+        if (ny < 0 || ny >= H) continue;
+        const nx = wrapX(cx + dx);
+        const ni = ny * W + nx;
+        if (coastDist[ni] >= 0) continue; // already visited
+        if (state.cells[ni].elevation > 0) continue; // land
+        coastDist[ni] = nextDist;
+        coastalHeight[ni] = ch;
+        queue.push(ni);
+      }
+    }
+  }
+
+  // Phase 2: Apply depth floor
+  let modified = 0;
+  let shallowToDeep = 0;
+  let minDist = Infinity, maxDist = -Infinity, sumDist = 0, distCount = 0;
+
+  for (let i = 0; i < TOTAL; i++) {
+    const c = state.cells[i];
+    if (c.elevation > 0) continue; // land
+    if (coastDist[i] < 0) continue; // unreached by BFS
+
+    // Stats
+    const d = coastDist[i];
+    if (d < minDist) minDist = d;
+    if (d > maxDist) maxDist = d;
+    sumDist += d;
+    distCount++;
+
+    const slopeMod = clamp(coastalHeight[i] * 6.0, 0.3, 1.5);
+    let depthFloor = (-0.05 - d * 0.08) * slopeMod;
+    depthFloor = Math.max(depthFloor, oceanicBase); // don't go below ocean floor
+
+    if (c.elevation > depthFloor) {
+      const wasShallow = c.isShallowWater;
+      c.elevation = depthFloor;
+      c.isLand = false;
+      c.isShallowWater = c.elevation > -0.08 && c.elevation <= 0.0;
+      c.isDeepWater = c.elevation <= -0.08;
+      modified++;
+      if (wasShallow && c.isDeepWater) shallowToDeep++;
+    }
+  }
+
+  console.log(`[step2b] Coastal bathymetry: ${modified} ocean cells deepened, ` +
+    `${shallowToDeep} shallow→deep transitions, ` +
+    `coastDist min=${minDist} max=${maxDist} mean=${distCount ? (sumDist / distCount).toFixed(1) : 'N/A'}`);
+}
+
+export { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step2b_coastalBathymetry, step3_computeMinerals };

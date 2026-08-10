@@ -5,7 +5,7 @@
 import { state } from './main.js';
 import { W, H, TOTAL, mulberry32, clamp } from './core-math.js';
 import { deriveTerrainAndCover } from './terrain-derive.js';
-import { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step3_computeMinerals } from './planet-geology.js';
+import { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step2b_coastalBathymetry, step3_computeMinerals } from './planet-geology.js';
 import { step4_computeAtmosphere } from './planet-atmosphere.js';
 
 // ── Generation pipeline ──
@@ -77,6 +77,9 @@ async function generatePlanet(seed) {
   await new Promise(r => setTimeout(r, 0));
   step2_computeElevation(seed, rng);
   const p2 = performance.now();
+  // Step 2b: Coastal bathymetry steepening
+  step2b_coastalBathymetry();
+  const p2b = performance.now();
   // Step 3: Minerals
   statusEl.textContent = 'Computing minerals…';
   await new Promise(r => setTimeout(r, 0));
@@ -96,7 +99,7 @@ async function generatePlanet(seed) {
 
   console.log(`Planet gen (ms): ` +
     `step1=${(p1-p0).toFixed(1)} step1b=${(p1b-p1).toFixed(1)} ` +
-    `step2=${(p2-p1b).toFixed(1)} step3=${(p3-p2).toFixed(1)} ` +
+    `step2=${(p2-p1b).toFixed(1)} step2b=${(p2b-p2).toFixed(1)} step3=${(p3-p2b).toFixed(1)} ` +
     `step4=${(p4-p3).toFixed(1)} step5=${(p5-p4).toFixed(1)} ` +
     `step5b=${(p5b-p5).toFixed(1)} ` +
     `TOTAL=${(p5b-p0).toFixed(1)}`);
