@@ -2,8 +2,9 @@
 // ── planet-atmosphere.js — Wind, currents, SST, precipitation, hydrology
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, TOTAL, clamp, wrapX, smoothstep } from './core-math.js';
+import { setStatus } from './dom.js';
 
 // Neighbour offset tables — module-level so the inner loops don't allocate
 // ~14M throw-away arrays per generation (they were declared per cell per pass).
@@ -14,10 +15,9 @@ const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
 
 // ── Step 4: Hydrological System ──
 async function step4_computeAtmosphere(seed, rng) {
-  const statusEl = document.getElementById('statusText');
 
   // ── Step 4a: Wind Vector Field ──
-  statusEl.textContent = 'Generating wind field…';
+  setStatus('Generating wind field…');
 
   for (let y = 0; y < H; y++) {
     const lat = (y / H) * 180 - 90;
@@ -132,7 +132,7 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   // ── Step 4b: Ocean Currents ──
-  statusEl.textContent = 'Computing ocean currents…';
+  setStatus('Computing ocean currents…');
   await new Promise(r => setTimeout(r, 0));
 
   const numCurrentIter = Math.round(state.params.currentIterations);
@@ -287,7 +287,7 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   // ── Step 4c: Moisture Advection & Precipitation ──
-  statusEl.textContent = 'Running precipitation model…';
+  setStatus('Running precipitation model…');
   await new Promise(r => setTimeout(r, 0));
 
   const moisture = new Float32Array(TOTAL);
@@ -465,7 +465,7 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   // ── Step 4d: Groundwater ──
-  statusEl.textContent = 'Computing groundwater…';
+  setStatus('Computing groundwater…');
   await new Promise(r => setTimeout(r, 0));
 
   for (let i = 0; i < TOTAL; i++) {
@@ -487,7 +487,7 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   // ── Step 4e: Drainage Accumulation ──
-  statusEl.textContent = 'Computing drainage…';
+  setStatus('Computing drainage…');
   await new Promise(r => setTimeout(r, 0));
 
   const landIndices = [];

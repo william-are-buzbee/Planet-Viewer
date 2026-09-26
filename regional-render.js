@@ -2,7 +2,7 @@
 // ── regional-render.js — Regional + Tile rendering ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, clamp, lerpColor, bilinearSampleHR } from './core-math.js';
 import { SHALLOW_WATER_TERRAIN_THRESHOLD, intToTerrainType, intToCoverType,
   TT_NONE, TT_DEEP_WATER, TT_WATER, TT_MUD, TT_GRASS,
@@ -41,10 +41,15 @@ function waterAvailColor(cell) {
   return { r: 10, g: Math.floor(30 + wa * 170), b: Math.floor(20 + wa * 100) };
 }
 
-const regionalCanvas = document.getElementById('regionalCanvas');
-const regionalCtx = regionalCanvas.getContext('2d');
-const tileCanvas = document.getElementById('tileCanvas');
-const tileCtx = tileCanvas.getContext('2d');
+// Canvases are bound by initRegionalRender(), not at import (see planet-render.js).
+let regionalCanvas, regionalCtx, tileCanvas, tileCtx;
+
+export function initRegionalRender() {
+  regionalCanvas = document.getElementById('regionalCanvas');
+  regionalCtx = regionalCanvas.getContext('2d');
+  tileCanvas = document.getElementById('tileCanvas');
+  tileCtx = tileCanvas.getContext('2d');
+}
 
 export { regionalCanvas };
 

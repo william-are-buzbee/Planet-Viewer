@@ -2,7 +2,7 @@
 // ── regional-gen.js — Regional detail generation ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import {
   W, H, TOTAL, noise2D, clamp,
   bilinearSampleHR, maxKey
@@ -76,7 +76,7 @@ function generateRegionalDetail(centerX, centerY) {
   _planetMaxLandElev = null; // recompute per generation
   const maxLand = getPlanetMaxLandElev();
 
-  const seed = parseInt(document.getElementById('seedInput').value, 10) || 0;
+  const seed = state.seed | 0;
   const regionSeed = (seed ^ 0x51ED270B) | 0;
 
   // World-space origin (top-left) in regional-cell units

@@ -2,23 +2,28 @@
 // ── planet-render.js — Planetary rendering (flat, globe, Mollweide) ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, TOTAL, clamp, hslToRgb, lerpColor } from './core-math.js';
 import { computeTilePalette } from './palette-compute.js';
 import { intToTerrainType, intToCoverType } from './terrain-derive.js';
 
-// ── Private canvas contexts ──
-const canvas = document.getElementById('planetCanvas');
-const ctx = canvas.getContext('2d');
-let imageData = ctx.createImageData(1024, 512);
-
-const globeCanvas = document.getElementById('globeCanvas');
+// ── Canvases — bound by initPlanetRender(), not at import, so this module
+//    loads without a DOM. Exports are live bindings: ui.js sees them once
+//    main.js has called initPlanetRender().
+let canvas, ctx, imageData;
+let globeCanvas, globeCtx;
+let mollweideCanvas, mollweideCtx;
 const HOME_ROT_X = 0.15;
 const HOME_ROT_Y = 0;
-const globeCtx = globeCanvas.getContext('2d');
 
-const mollweideCanvas = document.getElementById('mollweideCanvas');
-const mollweideCtx = mollweideCanvas.getContext('2d');
+export function initPlanetRender() {
+  canvas = document.getElementById('planetCanvas');
+  ctx = canvas.getContext('2d');
+  globeCanvas = document.getElementById('globeCanvas');
+  globeCtx = globeCanvas.getContext('2d');
+  mollweideCanvas = document.getElementById('mollweideCanvas');
+  mollweideCtx = mollweideCanvas.getContext('2d');
+}
 
 export { canvas, globeCanvas, mollweideCanvas, ctx };
 

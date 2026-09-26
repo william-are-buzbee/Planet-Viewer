@@ -2,7 +2,7 @@
 // ── regional-drainage.js — D8 flow accumulation and stream order
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { REGIONAL_SIZE } from './regional-constants.js';
 
 // ── Regional drainage: D8 flow accumulation + stream order ──
