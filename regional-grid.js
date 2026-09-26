@@ -18,11 +18,16 @@ export const ZONE_NAMES = ['tidal', 'coastal', 'lowland', 'mid_slope', 'upper_sl
 export const FT_BARREN = 0, FT_PHOTO = 1, FT_CHEMO = 2, FT_MIXO = 3, FT_NONE = 4, FT_FROZEN = 5;
 export const FLORA_NAMES = ['barren', 'photosynthetic', 'chemotrophic', 'mixotrophic', 'none', 'frozen'];
 
+// D8 neighbour order shared by the regional and tile drainage passes
+export const D8X = [-1, 0, 1, -1, 1, -1, 0, 1];
+export const D8Y = [-1, -1, -1, 0, 0, 1, 1, 1];
+
 export class RegionalGrid {
   constructor(size, originWorldX, originWorldY) {
     const N = size * size;
     this.S = size;
     this.N = N;
+    this.inflowTotalKm2 = 0;   // water injected at the border by regional-gen (km²·precip)
     // World-space (regional-cell units) coordinate of cell (0, 0)
     this.originWorldX = originWorldX;
     this.originWorldY = originWorldY;
@@ -61,8 +66,9 @@ export class RegionalGrid {
     this.slopeDir = f32();
     this.zone     = u8();
 
-    // Pass 3: drainage
+    // Pass 3: drainage (flowAccum in km²·precip; flowDir = D8 index of the receiving neighbour, 255 = none)
     this.flowAccum       = f32();
+    this.flowDir         = u8();
     this.drainageDensity = f32();
     this.streamOrder     = u8();
 
@@ -115,7 +121,7 @@ export class RegionalGrid {
       minerals: { iron: this.iron[i], copper: this.copper[i], manganese: this.manganese[i] },
       mineralTotal: this.mineralTotal[i],
       slopeMag: this.slopeMag[i], slopeDir: this.slopeDir[i], zone: ZONE_NAMES[this.zone[i]],
-      flowAccum: this.flowAccum[i], drainageDensity: this.drainageDensity[i], streamOrder: this.streamOrder[i],
+      flowAccum: this.flowAccum[i], flowDir: this.flowDir[i], drainageDensity: this.drainageDensity[i], streamOrder: this.streamOrder[i],
       grainSize: this.grainSize[i], saturation: this.saturation[i], waterTableDepth: this.waterTableDepth[i],
       floraType: FLORA_NAMES[this.floraType[i]], floraDensity: this.floraDensity[i],
       canopy: this.canopy[i], groundCover: this.groundCover[i], chemoCrust: this.chemoCrust[i],

@@ -28,7 +28,7 @@ tiles of ≈1.19 m covering one regional cell. The world is an archipelago on pu
 | regional-constants.js | the regional window's shared constants, tiles per regional cell, tile size |
 | regional-grid.js | the regional window as typed arrays (struct-of-arrays, row-major), enum tables, `cell(rx, ry)` |
 | regional-gen.js | regional detail generation |
-| regional-drainage.js | D8 flow accumulation, stream order |
+| regional-drainage.js | `routeFlow`: padded priority-flood + D8 used by the regional window and tile chunks; stream order against the planet max |
 | regional-substrate.js | grain size, saturation, water table depth |
 | regional-flora.js | flora type, ground cover, canopy |
 | regional-render.js | regional and tile rendering |
