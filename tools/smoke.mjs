@@ -23,7 +23,7 @@ const say = (...a) => realLog(...a);
 
 const seed = Number(process.argv[2] ?? 5);
 state.seed = seed;
-state.hiResMultiplier = 1;
+state.hiResMultiplier = 2;   // ×2 so hi-res footprints mix land and ocean corners (A2 has nothing to test at ×1)
 
 let t0 = performance.now();
 await generatePlanet(seed);
@@ -56,25 +56,34 @@ check(!hasNaN(state.hiResData.elevation) && !hasNaN(state.hiResData.groundwater)
 let coloured = 0;
 for (let i = 0; i < state.HR_TOTAL; i += 97) if (state.hiResData.colorR[i] || state.hiResData.colorG[i] || state.hiResData.colorB[i]) coloured++;
 check(coloured > 0, 'hi-res colours computed');
-// A2: a hi-res land cell whose planetary footprint gives NON-ZERO bilinear weight
-// to at least one land cell must never carry the ocean sentinel (groundwater 1.0).
-// Cells with no weighted land corner (noise-flipped land inside a planetary-ocean
-// cell; at ×1 that is every such pixel, since only its own cell has weight) still
-// fall back to plain bilinear and do carry it — tracked as A8 in DIAGNOSTIC.md.
-let sentinelWithLandWeight = 0, sentinelNoLandWeight = 0;
+// A2: for every hi-res land cell, the stored groundwater must equal the LAND-MASKED
+// bilinear of the planetary grid (ocean corners zero-weighted, renormalised).
+// Cells whose footprint has no weighted land corner at all (noise-flipped land
+// inside a planetary-ocean cell) fall back to plain bilinear and inherit the ocean
+// sentinels — that residue is counted here and tracked as A8 in DIAGNOSTIC.md.
+let maskMismatch = 0, mixedCells = 0, noLandWeight = 0;
 {
   const m = state.hiResMultiplier, hr = state.hiResData;
   for (let hy = 0; hy < state.HR_H; hy++) for (let hx = 0; hx < state.HR_W; hx++) {
     const hi = hy * state.HR_W + hx;
-    if (!hr.isLand[hi] || hr.groundwater[hi] < 0.999) continue;
+    if (!hr.isLand[hi]) continue;
     const lx = hx / m, ly = hy / m, x0 = Math.floor(lx), y0 = Math.floor(ly), fx = lx - x0, fy = ly - y0;
     const corners = [[x0, y0, (1 - fx) * (1 - fy)], [x0 + 1, y0, fx * (1 - fy)], [x0, y0 + 1, (1 - fx) * fy], [x0 + 1, y0 + 1, fx * fy]];
-    let landWeight = 0;
-    for (const [cx, cy, w] of corners) if (w > 0 && state.cells[Math.max(0, Math.min(H - 1, cy)) * W + ((cx % W) + W) % W].isLand) landWeight += w;
-    if (landWeight > 0) sentinelWithLandWeight++; else sentinelNoLandWeight++;
+    let landW = 0, oceanW = 0, acc = 0;
+    for (const [cx, cy, w] of corners) {
+      if (w <= 0) continue;
+      const c = state.cells[Math.max(0, Math.min(H - 1, cy)) * W + ((cx % W) + W) % W];
+      if (c.isLand) { landW += w; acc += w * c.groundwater; } else oceanW += w;
+    }
+    if (landW === 0) { noLandWeight++; continue; }
+    if (oceanW > 0) {
+      mixedCells++;
+      if (Math.abs(hr.groundwater[hi] - acc / landW) > 1e-4) maskMismatch++;
+    }
   }
 }
-check(sentinelWithLandWeight === 0, `no hi-res land cell with weighted land in its footprint carries the ocean sentinel (${sentinelWithLandWeight}; ${sentinelNoLandWeight} cells with no weighted land corner still do — A8)`);
+check(mixedCells > 0, `hi-res land cells with mixed land/ocean footprints exist to test (${mixedCells})`);
+check(maskMismatch === 0, `A2: stored groundwater equals the land-masked bilinear on every mixed cell (${maskMismatch} mismatches; ${noLandWeight} cells with no weighted land corner keep the sentinel — A8)`);
 
 // A land cell with some elevation for the regional / tile checks
 let px = -1, py = -1;

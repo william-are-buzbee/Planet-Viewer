@@ -34,7 +34,7 @@ that every other file imports (no imports of its own, no DOM), `dom.js` is the o
 ## Run and look
 
 Modules don't load from `file://`, so serve the folder: `npx serve .` or `python3 -m http.server`, then open `index.html`.
-`node tools/smoke.mjs` runs planet → hi-res → region → tile under Node with invariant checks (≈25 s, no browser);
+`node tools/smoke.mjs` runs planet → hi-res ×2 → region → tile under Node with invariant checks (≈25 s, no browser);
 `tools/probe.mjs` drives the real page in headless Chromium and prints the measurements `DIAGNOSTIC.md` cites. Beyond
 that the check is looking at it: from a cloud session the page can be opened in the pre-installed Chromium (Playwright)
 and screenshotted; the person's own check is the pull request's preview link (below).

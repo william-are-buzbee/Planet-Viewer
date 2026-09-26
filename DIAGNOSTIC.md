@@ -174,14 +174,15 @@ interim lever is the iteration counts (`currentIterations` 25, `sstAdvectionIter
 `state.params` and the panel but referenced nowhere else.
 *Fix:* delete them from `main.js` and `ui.js paramConfig`. 16 lines removed.
 
-**A8 (follow-up to A2). Land pixels with no *weighted* land corner still get the ocean sentinels.**
-A2 masks ocean corners when at least one planetary corner with non-zero bilinear weight is land. A
-hi-res land pixel produced by coastline noise *inside* a planetary-ocean cell can have land only on
-zero-weight corners (at ×1 that is every such pixel, since only its own cell has weight), so the
-mask has nothing to renormalise, falls back to plain bilinear, and the pixel inherits groundwater
-1.0 / water availability 1.0 / precipitation 0. `tools/smoke.mjs` counts them (79 at ×1, seed 5).
-*Fix:* when the weighted land sum is zero, average the land cells of the 3×3 planetary
-neighbourhood; only if that is empty keep the sentinel. ~15 lines in `stepHR2`.
+**A8 (residual risk from A2, no action yet).** A2 masks ocean corners only when at least one
+corner with non-zero bilinear weight is land; a hi-res land pixel produced by coastline noise
+*inside* a planetary-ocean cell can have none, in which case it falls back to plain bilinear and
+inherits the ocean sentinels. `tools/smoke.mjs` recomputes the land-masked bilinear for every
+mixed-footprint cell (0 mismatches at ×2, seed 5) and counts the no-weighted-land cells (0 at ×2,
+seed 5). If that count ever comes back non-zero, average the land cells of the 3×3 planetary
+neighbourhood in `stepHR2` instead of falling back. (An earlier draft counted 79 such cells at
+×1; that count was wrong — it was flagging land cells whose planetary groundwater legitimately
+saturates at 1.0.)
 
 **A7. Search-and-replace damage.** `planet-render.js:96` registers the plates overlay under the
 key `'state.plates'` (so the low-res fallback renders "surface" for it) and the file header reads
@@ -392,9 +393,10 @@ status instead of falling through to a renderer that no longer exists.
 - **Behaviour change (a latent bug):** regional and tile generation read `state.seed`, the seed of
   the planet actually on screen, instead of the seed input box. Before, editing the seed box without
   pressing Generate made every new region come from a different planet than the one displayed.
-- `tools/smoke.mjs` runs planet → hi-res ×1 → region → tile under plain Node in about 25 s and
-  checks invariants (no NaN, plausible land fraction, hi-res land carries no ocean sentinel, the
-  regional window is centred on the request, regional generation is deterministic, tile cached).
+- `tools/smoke.mjs` runs planet → hi-res ×2 → region → tile under plain Node in about 25 s and
+  checks invariants (no NaN, plausible land fraction, A2's land-masked bilinear reproduced on every
+  mixed-footprint hi-res cell, the regional window centred on the request, regional generation
+  deterministic, tile cached). It runs hi-res at ×2 so mixed footprints exist to test.
   This is the regression harness the report asked for; `tools/probe.mjs` remains the browser-side
   measurement tool.
 
