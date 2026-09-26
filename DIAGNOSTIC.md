@@ -174,6 +174,16 @@ interim lever is the iteration counts (`currentIterations` 25, `sstAdvectionIter
 `state.params` and the panel but referenced nowhere else.
 *Fix:* delete them from `main.js` and `ui.js paramConfig`. 16 lines removed.
 
+**A8 (residual risk from A2, no action yet).** A2 masks ocean corners only when at least one
+corner with non-zero bilinear weight is land; a hi-res land pixel produced by coastline noise
+*inside* a planetary-ocean cell can have none, in which case it falls back to plain bilinear and
+inherits the ocean sentinels. `tools/smoke.mjs` recomputes the land-masked bilinear for every
+mixed-footprint cell (0 mismatches at ×2, seed 5) and counts the no-weighted-land cells (0 at ×2,
+seed 5). If that count ever comes back non-zero, average the land cells of the 3×3 planetary
+neighbourhood in `stepHR2` instead of falling back. (An earlier draft counted 79 such cells at
+×1; that count was wrong — it was flagging land cells whose planetary groundwater legitimately
+saturates at 1.0.)
+
 **A7. Search-and-replace damage.** `planet-render.js:96` registers the plates overlay under the
 key `'state.plates'` (so the low-res fallback renders "surface" for it) and the file header reads
 `state.planet-render.js`. Harmless today only because the fallback path is dead (B2).
@@ -370,6 +380,25 @@ status instead of falling through to a renderer that no longer exists.
 | Net change | −1,098 / +106 lines across 10 files (`regional-gen.js` 1,128 → 696) |
 | Behaviour | none intended; `tools/probe.mjs` numbers are identical before and after, no errors |
 | Left for later | the `bilinearInterpolate` copies (one in `hires-gen.js` feeds a diagnostic, one in `regional-gen.js` feeds the probe) and the Tier D console diagnostics |
+
+## 7. B6 — applied (stacked on the B2 branch)
+
+- `state.js` holds the shared store; it imports nothing and touches no DOM. `main.js` re-exports it
+  so `import('/main.js')` in the probe still works.
+- `dom.js` (`byId`, `setStatus`) is the only DOM access the simulation modules make, and both are
+  no-ops without a `document`.
+- `planet-render.js` and `regional-render.js` bind their canvases in `initPlanetRender()` /
+  `initRegionalRender()` (called by `main.js` before `initUI`) instead of at import.
+- `generateTileDetail` no longer renders; its two UI callers render after it.
+- **Behaviour change (a latent bug):** regional and tile generation read `state.seed`, the seed of
+  the planet actually on screen, instead of the seed input box. Before, editing the seed box without
+  pressing Generate made every new region come from a different planet than the one displayed.
+- `tools/smoke.mjs` runs planet → hi-res ×2 → region → tile under plain Node in about 25 s and
+  checks invariants (no NaN, plausible land fraction, A2's land-masked bilinear reproduced on every
+  mixed-footprint hi-res cell, the regional window centred on the request, regional generation
+  deterministic, tile cached). It runs hi-res at ×2 so mixed footprints exist to test.
+  This is the regression harness the report asked for; `tools/probe.mjs` remains the browser-side
+  measurement tool.
 
 ---
 

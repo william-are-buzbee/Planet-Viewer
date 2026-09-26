@@ -2,7 +2,7 @@
 // ── planet-geology.js — Plate tectonics, geo seeds, elevation, minerals
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import {
   W, H, TOTAL,
   spherePos, CELL_TO_3D, dist3D, clamp, wrapX,

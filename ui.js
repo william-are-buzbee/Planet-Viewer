@@ -2,7 +2,7 @@
 // ── ui.js — Event handlers, keyboard, view switching, tuning, snapshot ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, TOTAL, clamp, getLatitudeBand } from './core-math.js';
 import { intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
@@ -884,6 +884,7 @@ export function initUI(runGeneration) {
             const tt0 = performance.now();
             generateTileDetail(trx, tryy);
             const tt1 = performance.now();
+            renderTileDetail(document.getElementById('tileOverlaySelect').value);
             const rc = state.regionalCells[trx][tryy];
             document.getElementById('tileDetailTitle').textContent =
               `TILES: (${trx}, ${tryy}) — ${rc.zone} ${rc.terrainType || ''}`;

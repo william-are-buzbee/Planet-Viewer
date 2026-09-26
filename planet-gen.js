@@ -2,15 +2,15 @@
 // ── planet-gen.js — Planetary generation pipeline (steps 1-5b) ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, TOTAL, mulberry32, clamp } from './core-math.js';
+import { setStatus } from './dom.js';
 import { deriveTerrainAndCover } from './terrain-derive.js';
 import { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step2b_coastalBathymetry, step3_computeMinerals } from './planet-geology.js';
 import { step4_computeAtmosphere } from './planet-atmosphere.js';
 
 // ── Generation pipeline ──
 async function generatePlanet(seed) {
-  const statusEl = document.getElementById('statusText');
   const rng = mulberry32(seed);
   state.cells = new Array(TOTAL);
   for (let i = 0; i < TOTAL; i++) {
@@ -63,17 +63,17 @@ async function generatePlanet(seed) {
   console.log('=== PLANET GENERATION ===');
   const p0 = performance.now();
   // Step 1: Plates
-  statusEl.textContent = 'Generating plates…';
+  setStatus('Generating plates…');
   await new Promise(r => setTimeout(r, 0));
   step1_generatePlates(seed, rng);
   const p1 = performance.now();
   // Step 1b: Generate geological seed points (mountains, arcs, rifts)
-  statusEl.textContent = 'Placing geological features…';
+  setStatus('Placing geological features…');
   await new Promise(r => setTimeout(r, 0));
   step1b_generateGeoSeeds(seed, rng);
   const p1b = performance.now();
   // Step 2: Elevation
-  statusEl.textContent = 'Computing elevation…';
+  setStatus('Computing elevation…');
   await new Promise(r => setTimeout(r, 0));
   step2_computeElevation(seed, rng);
   const p2 = performance.now();
@@ -81,12 +81,12 @@ async function generatePlanet(seed) {
   step2b_coastalBathymetry();
   const p2b = performance.now();
   // Step 3: Minerals
-  statusEl.textContent = 'Computing minerals…';
+  setStatus('Computing minerals…');
   await new Promise(r => setTimeout(r, 0));
   step3_computeMinerals(seed, rng);
   const p3 = performance.now();
   // Step 4: Atmosphere (async — yields internally between sub-phases)
-  statusEl.textContent = 'Computing atmosphere…';
+  setStatus('Computing atmosphere…');
   await new Promise(r => setTimeout(r, 0));
   await step4_computeAtmosphere(seed, rng);
   const p4 = performance.now();

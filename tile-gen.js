@@ -2,7 +2,7 @@
 // ── tile-gen.js — Tile/Chunk Generation (Phase B) ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import { W, H, mulberry32, hashInt, noise2D, clamp } from './core-math.js';
 import {
   deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD,
@@ -766,7 +766,7 @@ function placeTreeCover(context, tileElevation, waterBodies, seed) {
 function generateTileDetail(rx, ry) {
   if (!state.regionalCells || !state.regionalCells[rx] || !state.regionalCells[rx][ry]) return;
 
-  const seed = parseInt(document.getElementById('seedInput').value, 10) || 0;
+  const seed = state.seed | 0;
 
   // T1: context
   const context = sampleRegionalContext(rx, ry);
@@ -897,7 +897,6 @@ function generateTileDetail(rx, ry) {
   state.currentTileData = { tiles, rx, ry, zone, context };
   state.tileChunkCache.set(`${rx},${ry}`, state.currentTileData);
 
-  renderTileDetail(document.getElementById('tileOverlaySelect').value);
   printTileDiagnostic(tiles);
 }
 
@@ -953,6 +952,7 @@ function openTileView(rx, ry) {
       const t0 = performance.now();
       generateTileDetail(rx, ry);
       const t1 = performance.now();
+      renderTileDetail(document.getElementById('tileOverlaySelect').value);
       document.getElementById("statusText").textContent = `Tile chunk generated in ${(t1 - t0).toFixed(0)} ms`;
     }
     // Draw the position marker on the regional map

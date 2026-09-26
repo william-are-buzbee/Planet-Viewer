@@ -6,13 +6,15 @@ Read this first. If the repo has an audit or design doc (a Fable audit was writt
 
 A procedural planet generator in the browser: plate tectonics and elevation, then atmosphere, currents and hydrology, then a
 512×512 regional window (≈78 km per planetary cell) with drainage, substrate and flora, then tiles. Plain ES modules, no
-framework, no dependencies, no build step. `index.html` loads `main.js` as a module; `main.js` holds the shared `state` that
-every other file imports.
+framework, no dependencies, no build step. `index.html` loads `main.js` as a module; `state.js` holds the shared `state`
+that every other file imports (no imports of its own, no DOM), `dom.js` is the only DOM touch the simulation modules make.
 
 | file | owns |
 |---|---|
 | core-math.js | noise, RNG (`mulberry32`), coordinates, colour helpers; the planetary grid `W`×`H` (512×256) |
-| main.js | entry point, shared `state`, orchestration |
+| state.js | the shared `state` object (and `state.seed`, the seed of the planet on screen) |
+| dom.js | `byId` / `setStatus`, no-ops without a document |
+| main.js | entry point, orchestration, binds the renderers' canvases |
 | planet-gen.js | the planetary pipeline (steps 1–5b) |
 | planet-geology.js | plates, geo seeds, elevation, minerals |
 | planet-atmosphere.js | wind, currents, SST, precipitation, hydrology |
@@ -32,8 +34,10 @@ every other file imports.
 ## Run and look
 
 Modules don't load from `file://`, so serve the folder: `npx serve .` or `python3 -m http.server`, then open `index.html`.
-There are no tests; the check is looking at it. From a cloud session the page can be opened in the pre-installed Chromium
-(Playwright) and screenshotted; the person's own check is the pull request's preview link (below).
+`node tools/smoke.mjs` runs planet → hi-res ×2 → region → tile under Node with invariant checks (≈25 s, no browser);
+`tools/probe.mjs` drives the real page in headless Chromium and prints the measurements `DIAGNOSTIC.md` cites. Beyond
+that the check is looking at it: from a cloud session the page can be opened in the pre-installed Chromium (Playwright)
+and screenshotted; the person's own check is the pull request's preview link (below).
 
 ## Delivering a change
 

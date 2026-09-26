@@ -2,13 +2,14 @@
 // ── hires-gen.js — High-Resolution Surface Generation ──
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
+import { state } from './state.js';
 import {
   W, H, noise2D, noise3D,
   clamp, smoothstep, bilinearSampleHR
 } from './core-math.js';
 import { deriveTerrainAndCover, terrainTypeToInt, coverTypeToInt, intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
+import { byId, setStatus } from './dom.js';
 
 // NOTE: regional-gen.js has a separate bilinearInterpolate for the planetary grid.
 // This version operates on hi-res typed arrays with direct index access.
@@ -33,16 +34,16 @@ function yieldFrame() { return new Promise(r => setTimeout(r, 0)); }
 
 // ── Progress bar helpers ──
 function updateProgress(message, percent) {
-  const c = document.getElementById('progressContainer');
-  const b = document.getElementById('progressBar');
-  const t = document.getElementById('progressText');
+  const c = byId('progressContainer');
+  const b = byId('progressBar');
+  const t = byId('progressText');
   if (c) c.style.display = 'inline-block';
   if (b) b.style.width = clamp(percent, 0, 100) + '%';
   if (t) t.textContent = message || '';
 }
 function hideProgress() {
-  const c = document.getElementById('progressContainer');
-  const t = document.getElementById('progressText');
+  const c = byId('progressContainer');
+  const t = byId('progressText');
   if (c) c.style.display = 'none';
   if (t) t.textContent = '';
 }
@@ -604,7 +605,6 @@ async function generateHighResSurface(seed) {
   state.HR_TOTAL = state.HR_W * state.HR_H;
 
   const HR_TOTAL = state.HR_TOTAL;
-  const statusText = document.getElementById('statusText');
 
   // Allocate high-res typed arrays (guarded — Ultra can be large).
   try {
@@ -657,7 +657,7 @@ async function generateHighResSurface(seed) {
   } catch (err) {
     console.error('High-res allocation failed:', err);
     state.hiResData = null;
-    if (statusText) statusText.textContent = 'High-res grid too large for available memory — using low-res.';
+    setStatus('High-res grid too large for available memory — choose a lower resolution.');
     return;
   }
 
