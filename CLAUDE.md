@@ -39,12 +39,16 @@ There are no tests; the check is looking at it. From a cloud session the page ca
 
 1. One change or one pass per pull request. Work on a `claude/…` branch, push it (`git push -u origin claude/…`), open a pull
    request into `main`. Never push to `main` (it is protected; the person's merge is the release), never force-push or rebase.
-2. Identity for commits is `WB <willbuzbee@gmail.com>` (`git config user.name WB`, `user.email willbuzbee@gmail.com` in the
+2. One branch per change, not per session (the person, 26 Sep 2026). Each new task starts a fresh `claude/…` branch from the
+   current `origin/main` — this rule is standing permission to leave the session's assigned branch for it. Once a pull request
+   is open, its branch takes only fixes to that pull request; follow-up work goes on a new branch and a new pull request, so
+   the person can merge an open one while the session keeps working.
+3. Identity for commits is `WB <willbuzbee@gmail.com>` (`git config user.name WB`, `user.email willbuzbee@gmail.com` in the
    repo's local config; never any other name — the person, 26 Sep 2026). GitHub shows these commits "Unverified"; accepted.
-3. Pages (`.github/workflows/pages.yml`, `.github/publish.sh`, 26 Sep 2026) publishes the `gh-pages` branch: `main` is live at
+4. Pages (`.github/workflows/pages.yml`, `.github/publish.sh`, 26 Sep 2026) publishes the `gh-pages` branch: `main` is live at
    `https://william-are-buzbee.github.io/Planet-Viewer/`; a pull request is a preview at `…/preview/<number>/` (linked in a
    comment on it, removed when it closes); each merge is kept at `…/v/<date>-<commit>/`, never overwritten.
-4. Say in the pull request what changed, why, what was looked at, and what the person should check on the preview.
+5. Say in the pull request what changed, why, what was looked at, and what the person should check on the preview.
 
 ## The person
 
