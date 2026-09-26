@@ -190,10 +190,26 @@ function stepHR2_atmosphereRow(hy) {
     const w01 = (1 - fx) * fy;
     const w11 = fx * fy;
 
+    // Land-only fields: ocean cells carry sentinel values (groundwater 1.0,
+    // waterAvailability 1.0, precipitation 0) that must not bleed onto land.
+    // For hi-res LAND cells, zero the weight of ocean corners and renormalise.
+    // Fall back to plain bilinear when no corner is land (a noise-flipped land
+    // pixel sitting inside a planetary-ocean cell).
+    let l00 = w00, l10 = w10, l01 = w01, l11 = w11;
+    if (state.hiResData.isLand[hi]) {
+      l00 = c00.isLand ? w00 : 0;
+      l10 = c10.isLand ? w10 : 0;
+      l01 = c01.isLand ? w01 : 0;
+      l11 = c11.isLand ? w11 : 0;
+      const ls = l00 + l10 + l01 + l11;
+      if (ls > 0) { l00 /= ls; l10 /= ls; l01 /= ls; l11 /= ls; }
+      else        { l00 = w00; l10 = w10; l01 = w01; l11 = w11; }
+    }
+
     // Inline bilinear interpolation for all 12 continuous fields
-    state.hiResData.precipitation[hi] = c00.precipitation*w00 + c10.precipitation*w10 + c01.precipitation*w01 + c11.precipitation*w11;
-    state.hiResData.groundwater[hi]   = c00.groundwater*w00 + c10.groundwater*w10 + c01.groundwater*w01 + c11.groundwater*w11;
-    state.hiResData.waterAvail[hi]    = (c00.waterAvailability||0)*w00 + (c10.waterAvailability||0)*w10 + (c01.waterAvailability||0)*w01 + (c11.waterAvailability||0)*w11;
+    state.hiResData.precipitation[hi] = c00.precipitation*l00 + c10.precipitation*l10 + c01.precipitation*l01 + c11.precipitation*l11;
+    state.hiResData.groundwater[hi]   = c00.groundwater*l00 + c10.groundwater*l10 + c01.groundwater*l01 + c11.groundwater*l11;
+    state.hiResData.waterAvail[hi]    = (c00.waterAvailability||0)*l00 + (c10.waterAvailability||0)*l10 + (c01.waterAvailability||0)*l01 + (c11.waterAvailability||0)*l11;
     state.hiResData.volcanism[hi]     = (c00.volcanism||0)*w00 + (c10.volcanism||0)*w10 + (c01.volcanism||0)*w01 + (c11.volcanism||0)*w11;
     state.hiResData.iron[hi]          = c00.minerals.iron*w00 + c10.minerals.iron*w10 + c01.minerals.iron*w01 + c11.minerals.iron*w11;
     state.hiResData.copper[hi]        = c00.minerals.copper*w00 + c10.minerals.copper*w10 + c01.minerals.copper*w01 + c11.minerals.copper*w11;
