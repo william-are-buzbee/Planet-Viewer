@@ -2,6 +2,8 @@
 // ── terrain-derive.js — THE terrain derivation function + enums ──
 // ══════════════════════════════════════════════════════════════════
 
+import { DEEP_WATER_M } from './units.js';
+
 // ── Terrain / cover enums (compact typed-array storage) ──
 export const SHALLOW_WATER_TERRAIN_THRESHOLD = 0.05; // 5cm — below this, water is a film on ground, not a body of water
 
@@ -31,13 +33,15 @@ export function intToCoverType(i) { return _ctNames[i] || 'none'; }
 //    the output is the same, regardless of which view is rendering it.
 //    No other function assigns terrain types anywhere in the codebase.
 // ══════════════════════════════════════════════════════════════════
+// `elev` and `waterTableDepth` are METRES (units.js). Planetary / hi-res callers
+// convert with puToM(); the regional and tile layers already work in metres.
 export function deriveTerrainAndCover(elev, isLand, grainSize, saturation, groundCover, canopyDensity, chemoCrust, floraType, waterTableDepth, isCoastal) {
     // Return values
     let terrainType = 'dirt';
     let coverType = 'none';
 
     // ── Water ──
-    if (!isLand || elev <= -0.1) {
+    if (!isLand || elev <= -DEEP_WATER_M) {
         return { terrainType: 'deep_water', coverType: 'none' };
     }
     if (!isLand || elev <= 0) {

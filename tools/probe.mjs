@@ -132,9 +132,9 @@ log('RELIEF PER LAYER:', JSON.stringify(await page.evaluate(async () => {
   let tMn = 1e9, tMx = -1e9, water = 0, so3 = 0, trees = 0;
   for (let i = 0; i < t.elevation.length; i++) { tMn = Math.min(tMn, t.elevation[i]); tMx = Math.max(tMx, t.elevation[i]); if (t.hasWater[i]) water++; if (t.streamOrder[i] >= 3) so3++; if (t.canopy[i] >= 0.7) trees++; }
   return {
-    planetaryWindowSpan: +(bMx - bMn).toFixed(4), regionalWindowSpan: +(mx - mn).toFixed(4),
+    planetaryWindowSpanM: +((bMx - bMn) * 10000).toFixed(1), regionalWindowSpanM: +(mx - mn).toFixed(1),
     tile: { rx, ry, zone: rc.zone, terrain: rc.terrainType, regionalElev: +rc.baseElevation.toFixed(4), regionalHasWater: !!rc.hasWater,
-            spanInsideOneRegionalCell: +(tMx - tMn).toFixed(4), waterTiles: water, streamOrder3Tiles: so3, treeTiles: trees, ms: tileMs },
+            spanInsideOneRegionalCellM: +(tMx - tMn).toFixed(2), tilesPerSide: Math.sqrt(t.elevation.length), waterTiles: water, streamOrder3Tiles: so3, treeTiles: trees, ms: tileMs },
   };
 })));
 

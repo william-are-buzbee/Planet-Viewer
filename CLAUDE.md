@@ -8,6 +8,9 @@ A procedural planet generator in the browser: plate tectonics and elevation, the
 512×512 regional window (≈78 km per planetary cell) with drainage, substrate and flora, then tiles. Plain ES modules, no
 framework, no dependencies, no build step. `index.html` loads `main.js` as a module; `state.js` holds the shared `state`
 that every other file imports (no imports of its own, no DOM), `dom.js` is the only DOM touch the simulation modules make.
+Units: the planetary and hi-res grids are in *planet units* (1.0 = 10 km, tuned, leave alone); the regional and tile grids are
+in **metres**, converted once in regional-gen.js Pass 1a — `units.js` is the one place that says so. A tile chunk is 128×128
+tiles of ≈1.19 m covering one regional cell. The world is an archipelago on purpose (3–11 % land); **seed 5 is the anchor**.
 
 | file | owns |
 |---|---|
@@ -21,7 +24,8 @@ that every other file imports (no imports of its own, no DOM), `dom.js` is the o
 | planet-render.js | planetary rendering: flat, globe, Mollweide |
 | terrain-derive.js | the terrain derivation function and the terrain/cover enums |
 | palette-compute.js | the three-layer colour pipeline |
-| regional-constants.js | the regional window's shared constants |
+| units.js | elevation units: `ELEV_UNIT_M`, `puToM`, the shelf / coastal / deep-water thresholds in metres |
+| regional-constants.js | the regional window's shared constants, tiles per regional cell, tile size |
 | regional-gen.js | regional detail generation |
 | regional-drainage.js | D8 flow accumulation, stream order |
 | regional-substrate.js | grain size, saturation, water table depth |

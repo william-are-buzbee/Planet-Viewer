@@ -5,6 +5,7 @@
 import { state } from './state.js';
 import { W, H, TOTAL, mulberry32, clamp } from './core-math.js';
 import { setStatus } from './dom.js';
+import { puToM } from './units.js';
 import { deriveTerrainAndCover } from './terrain-derive.js';
 import { step1_generatePlates, step1b_generateGeoSeeds, step2_computeElevation, step2b_coastalBathymetry, step3_computeMinerals } from './planet-geology.js';
 import { step4_computeAtmosphere } from './planet-atmosphere.js';
@@ -179,7 +180,7 @@ function step5b_deriveTerrainType() {
     const isCoastal     = c.elevation > 0 && c.elevation < 0.03;
 
     const result = deriveTerrainAndCover(
-      c.elevation,
+      puToM(c.elevation),   // the classifier takes metres
       c.isLand,
       grainSize,
       saturation,

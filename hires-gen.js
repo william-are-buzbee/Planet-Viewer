@@ -10,6 +10,7 @@ import {
 import { deriveTerrainAndCover, terrainTypeToInt, coverTypeToInt, intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette } from './palette-compute.js';
 import { byId, setStatus } from './dom.js';
+import { puToM } from './units.js';
 
 // NOTE: regional-gen.js has a separate bilinearInterpolate for the planetary grid.
 // This version operates on hi-res typed arrays with direct index access.
@@ -546,7 +547,7 @@ function stepHR7_terrainRow(hy) {
     const isCoastal = elev > 0 && elev < 0.03;
 
     const result = deriveTerrainAndCover(
-      elev,
+      puToM(elev),   // the classifier takes metres
       state.hiResData.isLand[hi],
       state.hiResData.grainSize[hi],
       state.hiResData.saturation[hi],
