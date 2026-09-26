@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planet Generator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #111214;
+  color: #c8c8cc;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #1a1b1e;
+  border-bottom: 1px solid #2a2b2e;
+  flex-wrap: wrap;
+}
+
+.top-bar label {
+  color: #888;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.top-bar input[type="number"] {
+  width: 90px;
+  padding: 5px 8px;
+  background: #111214;
+  border: 1px solid #3a3b3e;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 13px;
+  border-radius: 3px;
+}
+
+.top-bar input[type="number"]:focus {
+  outline: none;
+  border-color: #5a7a9a;
+}
+
+.top-bar button {
+  padding: 5px 14px;
+  background: #2a4a6a;
+  border: 1px solid #3a5a7a;
+  color: #d0d8e0;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.top-bar button:hover { background: #3a5a7a; }
+.top-bar button:active { background: #1a3a5a; }
+
+.top-bar select {
+  padding: 5px 8px;
+  background: #111214;
+  border: 1px solid #3a3b3e;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.top-bar select:focus { outline: none; border-color: #5a7a9a; }
+
+.top-bar .sep {
+  width: 1px;
+  height: 20px;
+  background: #2a2b2e;
+}
+
+.status-text {
+  color: #666;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.main-area {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.planetary-panel {
+  flex: 1 1 55%;
+  max-width: 640px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.planetary-panel canvas {
+  width: 100%;
+  max-width: 640px;
+}
+
+/* Tooltip */
+.cell-tooltip {
+  position: fixed;
+  z-index: 1000;
+  background: rgba(20, 22, 26, 0.94);
+  border: 1px solid #3a4a5a;
+  border-radius: 5px;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #c8c8cc;
+  pointer-events: none;
+  max-width: 320px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+.cell-tooltip .tip-row {
+  white-space: nowrap;
+}
+
+.cell-tooltip .tip-row b {
+  color: #5a7a9a;
+  font-weight: 600;
+}
+
+canvas {
+  border: 1px solid #2a2b2e;
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+canvas.globe-canvas {
+  image-rendering: auto;
+  cursor: grab;
+}
+
+canvas.globe-canvas:active {
+  cursor: grabbing;
+}
+
+canvas.mollweide-canvas {
+  image-rendering: auto;
+  cursor: crosshair;
+}
+
+canvas.hidden-canvas {
+  display: none;
+}
+
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid #3a3b3e;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.view-toggle button {
+  padding: 5px 10px;
+  background: #111214;
+  border: none;
+  border-right: 1px solid #3a3b3e;
+  color: #888;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-radius: 0;
+}
+
+.view-toggle button:last-child {
+  border-right: none;
+}
+
+.view-toggle button:hover {
+  background: #1e2024;
+  color: #c0c0c4;
+}
+
+.view-toggle button.active {
+  background: #2a4a6a;
+  color: #d0d8e0;
+}
+
+/* ── Snapshot Info Panel (bottom-left quadrant) ── */
+.snapshot-panel {
+  background: #1a1b1e;
+  border: 1px solid #2a2b2e;
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #c8c8cc;
+  min-height: 180px;
+  max-height: 400px;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 640px;
+  margin-top: 10px;
+}
+
+.snapshot-panel::-webkit-scrollbar { width: 5px; }
+.snapshot-panel::-webkit-scrollbar-track { background: #111214; border-radius: 3px; }
+.snapshot-panel::-webkit-scrollbar-thumb { background: #3a3b3e; border-radius: 3px; }
+
+.snapshot-panel .snap-placeholder {
+  color: #555;
+  font-style: italic;
+  text-align: center;
+  padding: 60px 0;
+}
+
+.snapshot-panel .snap-section {
+  margin-bottom: 6px;
+}
+
+.snapshot-panel .snap-section:last-child {
+  margin-bottom: 0;
+}
+
+.snapshot-panel .snap-header {
+  color: #5a7a9a;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #2a2b2e;
+  padding-bottom: 2px;
+  margin-bottom: 3px;
+}
+
+.snapshot-panel .snap-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #b0b0b4;
+}
+
+.snapshot-panel .snap-row b {
+  color: #7a9aba;
+  font-weight: 600;
+}
+
+.snapshot-panel .snap-row .val {
+  color: #d0d0d4;
+}
+
+.snapshot-panel .snap-timestamp {
+  color: #555;
+  font-size: 10px;
+  text-align: right;
+  margin-top: 6px;
+  border-top: 1px solid #2a2b2e;
+  padding-top: 4px;
+}
+
+.info-panel {
+  display: none;
+}
+
+
+
+/* ── Regional detail panel ── */
+.regional-panel {
+  flex: 1 1 40%;
+  max-width: 520px;
+  min-width: 280px;
+}
+
+
+
+.regional-placeholder {
+  background: #1a1b1e;
+  border: 1px solid #2a2b2e;
+  border-radius: 4px;
+  padding: 24px 16px;
+  text-align: center;
+  color: #555;
+  font-style: italic;
+  font-size: 12px;
+  min-height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.regional-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #1a1b1e;
+  border: 1px solid #2a2b2e;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+}
+
+.regional-header .region-label {
+  color: #5a7a9a;
+  font-size: 12px;
+  flex: 1;
+}
+
+.regional-header select {
+  padding: 4px 8px;
+  background: #111214;
+  border: 1px solid #3a3b3e;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.regional-header select:focus { outline: none; border-color: #5a7a9a; }
+
+.regional-header .close-btn {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid #3a3b3e;
+  color: #888;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.regional-header .close-btn:hover { background: #2a2b2e; color: #ccc; }
+
+.regional-canvas-wrap {
+  border: 1px solid #2a2b2e;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.regional-canvas-wrap canvas {
+  image-rendering: pixelated;
+  cursor: crosshair;
+  width: 100%;
+  max-width: 1024px;
+}
+
+.active-panel {
+  border-color: #5a7a9a !important;
+}
+
+.regional-canvas-wrap.active-panel {
+  border-color: #5a7a9a !important;
+}
+
+.regional-header.active-panel {
+  border-color: #5a7a9a !important;
+}
+
+/* ── Tuning Panel ── */
+#tuningToggle {
+  padding: 5px 14px;
+  background: #2a4a6a;
+  border: 1px solid #3a5a7a;
+  color: #d0d8e0;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+#tuningToggle:hover { background: #3a5a7a; }
+
+#tuningPanel {
+  display: none;
+  background: rgba(10, 15, 25, 0.95);
+  border: 1px solid rgba(100, 120, 150, 0.25);
+  border-radius: 6px;
+  padding: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+  width: 100%;
+}
+
+#tuningPanel::-webkit-scrollbar {
+  width: 6px;
+}
+#tuningPanel::-webkit-scrollbar-track {
+  background: rgba(20, 25, 35, 0.5);
+  border-radius: 3px;
+}
+#tuningPanel::-webkit-scrollbar-thumb {
+  background: rgba(100, 120, 150, 0.3);
+  border-radius: 3px;
+}
+
+.tune-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.tune-presets button {
+  padding: 3px 10px;
+  background: #1e2a3a;
+  border: 1px solid #3a4a5a;
+  color: #8899aa;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+}
+.tune-presets button:hover {
+  background: #2a3a4a;
+  color: #aabbcc;
+}
+.tune-presets button.preset-active {
+  background: #2a4a6a;
+  color: #d0d8e0;
+  border-color: #4a6a8a;
+}
+
+.tune-group-label {
+  color: #667788;
+  font-size: 11px;
+  margin: 10px 0 4px 0;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.tune-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+  font-size: 12px;
+}
+
+.tune-row label {
+  width: 140px;
+  text-align: right;
+  color: #8899aa;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.tune-row input[type="range"] {
+  width: 120px;
+  accent-color: #4a7aaa;
+}
+
+.tune-value {
+  width: 50px;
+  text-align: left;
+  color: #aabbcc;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.tune-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(100, 120, 150, 0.15);
+}
+
+.tune-actions button {
+  padding: 4px 12px;
+  background: #1e2a3a;
+  border: 1px solid #3a4a5a;
+  color: #8899aa;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.tune-actions button:hover {
+  background: #2a3a4a;
+  color: #aabbcc;
+}
+
+.tune-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 30, 50, 0.95);
+  border: 1px solid #4a6a8a;
+  color: #c0d0e0;
+  padding: 8px 20px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  z-index: 2000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.tune-toast.visible { opacity: 1; }
+
+.tuning-wrap {
+  width: 100%;
+  padding: 0 16px 8px 16px;
+  background: #1a1b1e;
+  border-bottom: 1px solid #2a2b2e;
+}
+
+.info-value.type-continental { color: #8ab47a; }
+.info-value.type-oceanic { color: #5a8aba; }
+.info-value.type-photo { color: #c06040; }
+.info-value.type-chemo { color: #8050a0; }
+.info-value.type-mixo { color: #a05070; }
+.info-value.type-barren { color: #808080; }
+.info-value.type-frozen { color: #c0c8d0; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <label for="seedInput">Seed</label>
+  <input type="number" id="seedInput" value="42" min="0" max="999999">
+  <button id="genBtn">Generate</button>
+  <select id="resolutionSelect" title="Surface detail resolution">
+    <option value="1">Normal (512×256)</option>
+    <option value="2">High (1024×512)</option>
+    <option value="4" selected>Very High (2048×1024)</option>
+    <option value="8">Ultra (4096×2048)</option>
+  </select>
+  <div id="progressContainer" style="display:none; width:180px; height:14px; border:1px solid #3a5a7a; border-radius:3px; overflow:hidden; background:#141c28; vertical-align:middle;">
+    <div id="progressBar" style="height:100%; width:0%; background:#4a9d8e; transition:width 0.1s;"></div>
+  </div>
+  <span id="progressText" style="font-size:11px; color:#8fa; display:inline-block; min-width:110px; vertical-align:middle;"></span>
+  <div class="sep"></div>
+  <label for="overlaySelect">Overlay</label>
+  <select id="overlaySelect">
+    <option value="surface">Surface</option>
+    <option value="topographic">Topographic</option>
+    <option value="plates">Plates</option>
+    <option value="iron">Mineral: Iron</option>
+    <option value="copper">Mineral: Copper</option>
+    <option value="manganese">Mineral: Manganese</option>
+    <option value="composite">Mineral: Composite</option>
+    <option value="moisture">Moisture</option>
+    <option value="precipitation">Precipitation</option>
+    <option value="groundwater">Groundwater</option>
+    <option value="waterAvail">Water Availability</option>
+    <option value="wind">Wind</option>
+    <option value="currents">Ocean Currents</option>
+    <option value="floraType">Flora Type</option>
+    <option value="floraDensity">Flora Density</option>
+    <option value="terrainType">Terrain Type (HR)</option>
+    <option value="substrate">Substrate (HR)</option>
+    <option value="saturation">Saturation (HR)</option>
+    <option value="drainage">Drainage (HR)</option>
+  </select>
+  <div class="sep"></div>
+  <label>View</label>
+  <div class="view-toggle">
+    <button id="viewFlat" class="active" title="Flat map view">🗺 Flat</button>
+    <button id="viewGlobe" title="3D globe view">🌍 Globe</button>
+    <button id="viewMollweide" title="Mollweide equal-area projection">🗂 Mollweide</button>
+  </div>
+  <button id="homeBtn" title="Return to home orientation (north-up, equator-centered)">⌂ Home</button>
+  <button id="infoSnapBtn" title="Capture snapshot of current cell data (I)">I Info</button>
+  <span id="speedControl" style="display:none;">
+    <label style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Speed</label>
+    <input type="range" id="spinSpeedSlider" min="0" max="100" value="30"
+           style="width:100px;vertical-align:middle;">
+    <button id="pauseSpinBtn" title="Pause/Resume spin" style="padding:5px 8px;background:#2a4a6a;border:1px solid #3a5a7a;color:#d0d8e0;font-family:inherit;font-size:12px;cursor:pointer;border-radius:3px;">⏸</button>
+  </span>
+  <span class="status-text" id="statusText">Ready</span>
+</div>
+
+<div class="tuning-wrap">
+  <button id="tuningToggle">⚙ Tuning ▼</button>
+  <div id="tuningPanel"></div>
+</div>
+<div class="tune-toast" id="tuneToast"></div>
+
+<div class="main-area">
+  <div class="planetary-panel">
+    <canvas id="planetCanvas" width="1024" height="512"></canvas>
+    <canvas id="globeCanvas" class="globe-canvas hidden-canvas" width="600" height="600"></canvas>
+    <canvas id="mollweideCanvas" class="mollweide-canvas hidden-canvas" width="1024" height="512"></canvas>
+    <div class="snapshot-panel" id="snapshotPanel">
+      <div class="snap-placeholder">Press <b>I</b> to capture cell info</div>
+    </div>
+  </div>
+  <div class="regional-panel" id="regionalPanel">
+    <div class="regional-placeholder" id="regionalPlaceholder">Click a cell on any map view to generate a high-resolution regional detail view (~1 km per cell).</div>
+    <div id="regionalActive" style="display:none;">
+      <div class="regional-header" id="regionalHeader">
+        <span class="region-label" id="regionLabel">REGION: (—, —)</span>
+        <select id="regionalOverlaySelect">
+          <option value="surface">Surface</option>
+          <option value="topographic">Topographic</option>
+          <option value="drainage">Drainage</option>
+          <option value="saturation">Saturation</option>
+          <option value="terrainType">Terrain Type</option>
+          <option value="zone">Zone</option>
+          <option value="iron">Mineral: Iron</option>
+          <option value="copper">Mineral: Copper</option>
+          <option value="manganese">Mineral: Manganese</option>
+          <option value="composite">Mineral: Composite</option>
+          <option value="moisture">Moisture</option>
+          <option value="precipitation">Precipitation</option>
+          <option value="groundwater">Groundwater</option>
+          <option value="waterAvail">Water Availability</option>
+          <option value="floraType">Flora Type</option>
+          <option value="floraDensity">Flora Density</option>
+        </select>
+        <button class="close-btn" id="closeRegionalBtn" title="Close regional view">✕</button>
+      </div>
+      <div class="regional-canvas-wrap" id="regionalCanvasWrap">
+        <canvas id="regionalCanvas" width="512" height="512"></canvas>
+      </div>
+    </div>
+    <!-- ── Tile detail panel (Phase B — additive) ── -->
+    <div id="tileDetailContainer" style="display:none; position:relative; margin-top:12px;">
+      <div class="regional-header" id="tileDetailHeader">
+        <span class="region-label" id="tileDetailTitle">TILES:</span>
+        <select id="tileOverlaySelect">
+          <option value="surface">Surface</option>
+          <option value="paletteFg">Palette FG</option>
+          <option value="drainage">Drainage</option>
+          <option value="saturation">Saturation</option>
+          <option value="terrain">Terrain Type</option>
+          <option value="substrate">Substrate</option>
+          <option value="canopy">Canopy</option>
+          <option value="flora">Flora Type</option>
+          <option value="variant">Variant</option>
+        </select>
+        <button class="close-btn" id="tileCloseBtn" title="Close tile view">✕</button>
+      </div>
+      <div class="regional-canvas-wrap" id="tileCanvasWrap">
+        <canvas id="tileCanvas" width="512" height="512"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="cell-tooltip" id="cellTooltip" style="display:none;"></div>
+<div class="cell-tooltip" id="tileTooltip" style="display:none;"></div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
