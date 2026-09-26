@@ -10,8 +10,36 @@ import { SHALLOW_WATER_TERRAIN_THRESHOLD, intToTerrainType, intToCoverType,
   CT_NONE } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical, regionalPhysical } from './palette-compute.js';
 import { REGIONAL_SIZE, CELLS_PER_PLANETARY, getPlanetMaxLandElev } from './regional-gen.js';
-import { mineralChannel, overlayFunctions } from './planet-render.js';
 import { CHUNK_W, CHUNK_H, CHUNK_TOTAL } from './tile-gen.js';
+
+// ── Cell-object colour helpers (regional cells carry named fields) ──
+function mineralChannel(cell, channel) {
+  if (!cell.isLand && !cell.isShallowWater) {
+    const v = Math.floor(cell.minerals[channel] * 40);
+    if (channel === 'iron') return { r: v, g: 0, b: 0 };
+    if (channel === 'copper') return { r: 0, g: v, b: 0 };
+    return { r: 0, g: 0, b: v };
+  }
+  const v = Math.floor(cell.minerals[channel] * 255);
+  if (channel === 'iron') return { r: v, g: Math.floor(v / 4), b: Math.floor(v / 8) };
+  if (channel === 'copper') return { r: Math.floor(v / 8), g: v, b: Math.floor(v / 3) };
+  return { r: Math.floor(v / 3), g: Math.floor(v / 8), b: v };
+}
+function precipColor(cell) {
+  if (!cell.isLand) return { r: 25, g: 35, b: 55 };
+  const p = cell.precipitation;
+  return { r: 10, g: Math.floor(20 + p * 80), b: Math.floor(40 + p * 200) };
+}
+function groundwaterColor(cell) {
+  if (!cell.isLand) return { r: 15, g: 20, b: 30 };
+  const gw = cell.groundwater;
+  return { r: 10, g: Math.floor(30 + gw * 150), b: Math.floor(40 + gw * 120) };
+}
+function waterAvailColor(cell) {
+  if (!cell.isLand) return { r: 15, g: 20, b: 30 };
+  const wa = cell.waterAvailability;
+  return { r: 10, g: Math.floor(30 + wa * 170), b: Math.floor(20 + wa * 100) };
+}
 
 const regionalCanvas = document.getElementById('regionalCanvas');
 const regionalCtx = regionalCanvas.getContext('2d');
@@ -35,16 +63,12 @@ const regionalOverlayFunctions = {
 
     // Ocean cells: sample hi-res colors (ocean color doesn't need regional detail)
     if (!cell.isLand) {
-      if (state.hiResData) {
-        const hx = (cell.worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-        const hy = (cell.worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
-        const r = bilinearSampleHR(state.hiResData.colorR, hx, hy, state.HR_W, state.HR_H);
-        const g = bilinearSampleHR(state.hiResData.colorG, hx, hy, state.HR_W, state.HR_H);
-        const b = bilinearSampleHR(state.hiResData.colorB, hx, hy, state.HR_W, state.HR_H);
-        return { r: Math.round(r), g: Math.round(g), b: Math.round(b) };
-      }
-      if (cell.isDeepWater) return computeTilePalette({ terrainType: 'deep_water' }).bg;
-      return computeTilePalette({ terrainType: 'water', waterDepth: 0.15 }).bg;
+      const hx = (cell.worldX / CELLS_PER_PLANETARY) * state.hiResMultiplier;
+      const hy = (cell.worldY / CELLS_PER_PLANETARY) * state.hiResMultiplier;
+      const r = bilinearSampleHR(state.hiResData.colorR, hx, hy, state.HR_W, state.HR_H);
+      const g = bilinearSampleHR(state.hiResData.colorG, hx, hy, state.HR_W, state.HR_H);
+      const b = bilinearSampleHR(state.hiResData.colorB, hx, hy, state.HR_W, state.HR_H);
+      return { r: Math.round(r), g: Math.round(g), b: Math.round(b) };
     }
 
     // Land cells: compute color from the regional cell's own physical state.
@@ -103,10 +127,10 @@ const regionalOverlayFunctions = {
     g: Math.floor(cell.minerals.copper * (cell.isLand ? 255 : 80)),
     b: Math.floor(cell.minerals.manganese * (cell.isLand ? 255 : 80)),
   }),
-  'moisture': cell => overlayFunctions['moisture'](cell),
-  'precipitation': cell => overlayFunctions['precipitation'](cell),
-  'groundwater': cell => overlayFunctions['groundwater'](cell),
-  'waterAvail': cell => overlayFunctions['waterAvail'](cell),
+  'moisture': precipColor,
+  'precipitation': precipColor,
+  'groundwater': groundwaterColor,
+  'waterAvail': waterAvailColor,
   'floraType': function(cell) {
     if (cell.floraType === 'photosynthetic') return { r: 128, g: 32, b: 32 };
     if (cell.floraType === 'chemotrophic')   return { r: 80, g: 32, b: 96 };

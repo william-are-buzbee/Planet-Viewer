@@ -355,9 +355,25 @@ Unchanged by design (Tier B/C work): 221 MB per region, regional relief 0.134 vs
 relief 0.035 inside one regional cell, 15° drain-direction drift between ×1 and ×2, 10.7%
 land-mask disagreement. No console or page errors in any run.
 
+## 6. B2 — applied (own branch / pull request)
+
+Everything in Appendix A is gone: the low-res regional path and its substrate/flora twins, the
+cell-object overlay table and low-res renderers in `planet-render.js`, the `_est*` fields, the
+unreferenced `core-math.js` helpers, the no-op cover switch. The four cell-object colour helpers
+the regional overlays still needed (`mineralChannel`, precipitation, groundwater, water
+availability) moved into `regional-render.js`. `generateRegionalDetail` is now the hi-res path
+directly. If the hi-res allocation fails, generation stops with a "choose a lower resolution"
+status instead of falling through to a renderer that no longer exists.
+
+| | |
+|---|---|
+| Net change | −1,098 / +106 lines across 10 files (`regional-gen.js` 1,128 → 696) |
+| Behaviour | none intended; `tools/probe.mjs` numbers are identical before and after, no errors |
+| Left for later | the `bilinearInterpolate` copies (one in `hires-gen.js` feeds a diagnostic, one in `regional-gen.js` feeds the probe) and the Tier D console diagnostics |
+
 ---
 
-## Appendix A — Dead code inventory (candidates for deletion in B2)
+## Appendix A — Dead code inventory (deleted in B2; kept as the record of what was there)
 
 | File | Range / symbol | Why dead |
 |---|---|---|

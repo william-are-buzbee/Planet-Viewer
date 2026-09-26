@@ -152,8 +152,7 @@ function step5_computeFlora() {
 // classifies terrain identically to the regional / high-res / tile views.
 // The low-res grid doesn't compute the detailed substrate/flora fields those
 // grids have, so they're ESTIMATED here from the planetary sim's own fields.
-// The same estimates are stashed on the cell so the surface overlay's
-// computeTilePalette call sees the exact inputs the derivation used.
+// (Only terrainType / coverType are consumed — by the snapshot panel.)
 function step5b_deriveTerrainType() {
   for (let i = 0; i < TOTAL; i++) {
     const c = state.cells[i];
@@ -194,11 +193,6 @@ function step5b_deriveTerrainType() {
 
     c.terrainType = result.terrainType;
     c.coverType   = result.coverType;
-    c._estGrainSize   = grainSize;
-    c._estSaturation  = saturation;
-    c._estGroundCover = groundCover;
-    c._estCanopy      = canopyDensity;
-    c._estChemoCrust  = chemoCrust;
   }
 }
 

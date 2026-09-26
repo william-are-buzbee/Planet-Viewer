@@ -75,22 +75,9 @@ function selectSpriteVariant(terrainType, coverType, physical, wx, wy) {
             ground = 0;
     }
 
-    switch (coverType) {
-        case 'forest':
-            cover = 0;
-            break;
-        case 'sparse_forest':
-            cover = 0;
-            break;
-        case 'mushforest':
-            cover = 0;
-            break;
-        case 'sparse_mushforest':
-            cover = 0;
-            break;
-        default:
-            cover = 0;
-    }
+    // Cover sprites have a single variant so far; branch here per coverType
+    // once the sprite sheet has alternatives.
+    cover = 0;
 
     return { ground, cover };
 }

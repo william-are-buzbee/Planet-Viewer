@@ -168,6 +168,13 @@ async function runGeneration() {
     await generateHighResSurface(seed);
     state.planet = state.hiResData;
     const t2 = performance.now();
+    if (!state.hiResData) {
+      // Allocation failed (Ultra on a small machine). There is no low-res
+      // rendering path any more: stop here and ask for a smaller grid.
+      hideProgress();
+      statusText.textContent = 'High-res grid too large for available memory — choose a lower resolution and Generate again.';
+      return;
+    }
 
     updateProgress('Rendering…', 99);
     await yieldFrame();

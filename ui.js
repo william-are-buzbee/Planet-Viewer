@@ -8,7 +8,7 @@ import { intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
 import {
   render, renderGlobe, renderMollweide,
-  drawSelectionMarker, overlayFunctions,
+  drawSelectionMarker,
   mollweidePixelToCell, globePixelToCell,
   canvas, globeCanvas, mollweideCanvas, ctx
 } from './planet-render.js';

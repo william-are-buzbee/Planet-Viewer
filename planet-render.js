@@ -22,155 +22,6 @@ const mollweideCtx = mollweideCanvas.getContext('2d');
 
 export { canvas, globeCanvas, mollweideCanvas, ctx };
 
-// ── Mineral channel helper ──
-export function mineralChannel(cell, channel) {
-  if (!cell.isLand && !cell.isShallowWater) {
-    const v = Math.floor(cell.minerals[channel] * 40);
-    if (channel === 'iron') return { r: v, g: 0, b: 0 };
-    if (channel === 'copper') return { r: 0, g: v, b: 0 };
-    return { r: 0, g: 0, b: v };
-  }
-  const v = Math.floor(cell.minerals[channel] * 255);
-  if (channel === 'iron') return { r: v, g: Math.floor(v / 4), b: Math.floor(v / 8) };
-  if (channel === 'copper') return { r: Math.floor(v / 8), g: v, b: Math.floor(v / 3) };
-  return { r: Math.floor(v / 3), g: Math.floor(v / 8), b: v };
-}
-
-function setPixel2x(x, y, r, g, b) {
-  const sx = x * 2, sy = y * 2;
-  for (let dy = 0; dy < 2; dy++) {
-    for (let dx = 0; dx < 2; dx++) {
-      const off = ((sy + dy) * 1024 + (sx + dx)) * 4;
-      imageData.data[off] = r;
-      imageData.data[off + 1] = g;
-      imageData.data[off + 2] = b;
-      imageData.data[off + 3] = 255;
-    }
-  }
-}
-
-// ── Overlay color functions (low-res) ──
-export const overlayFunctions = {
-  'surface': function(cell) {
-    if (cell.isDeepWater) return computeTilePalette({ terrainType: 'deep_water' }).bg;
-    if (cell.isShallowWater) {
-      const m = cell.minerals || {};
-      return computeTilePalette({
-        terrainType: 'water', waterDepth: 0.15,
-        iron: m.iron || 0, copper: m.copper || 0, manganese: m.manganese || 0,
-      }).bg;
-    }
-    if (cell.isFreezing) return { r: 210, g: 215, b: 220 };
-    const m = cell.minerals || {};
-    return computeTilePalette({
-      terrainType:    cell.terrainType,
-      coverType:      cell.coverType,
-      iron:           m.iron || 0,
-      copper:         m.copper || 0,
-      manganese:      m.manganese || 0,
-      grainSize:      cell._estGrainSize != null ? cell._estGrainSize : 0.3,
-      saturation:     cell._estSaturation || 0,
-      organicContent: 0,
-      groundCover:    cell._estGroundCover || 0,
-      canopyDensity:  cell._estCanopy || 0,
-      chemoCrust:     cell._estChemoCrust || 0,
-      waterDepth:     0,
-      floraType:      cell.floraType || 'barren',
-    }).bg;
-  },
-  'topographic': function(cell) {
-    if (cell.isDeepWater)    return { r: 10, g: 22, b: 40 };
-    if (cell.isShallowWater) return { r: 26, g: 48, b: 80 };
-    if (cell.isFreezing && cell.isLand) {
-      const t = clamp((cell.elevation) / 0.6, 0, 1);
-      return lerpColor({ r: 190, g: 195, b: 200 }, { r: 220, g: 225, b: 230 }, t);
-    }
-    const e = cell.elevation;
-    if (e < 0.05)  return { r: 60, g: 75, b: 55 };
-    if (e < 0.15)  return { r: 90, g: 100, b: 65 };
-    if (e < 0.30)  return { r: 130, g: 115, b: 70 };
-    if (e < 0.45)  return { r: 160, g: 130, b: 90 };
-    if (e < 0.60)  return { r: 180, g: 160, b: 130 };
-    return { r: 200, g: 185, b: 160 };
-  },
-  'plates': function(cell) {
-    if (cell.boundaryDistance === 0 && cell.boundaryType !== null) return { r: 240, g: 240, b: 240 };
-    const hue = (cell.plateId / state.plates.length) * 360;
-    const sat = cell.plateType === 'continental' ? 0.4 : 0.25;
-    const lum = cell.plateType === 'continental' ? 0.45 : 0.30;
-    return hslToRgb(hue, sat, lum);
-  },
-  'iron':      cell => mineralChannel(cell, 'iron'),
-  'copper':    cell => mineralChannel(cell, 'copper'),
-  'manganese': cell => mineralChannel(cell, 'manganese'),
-  'composite': cell => ({
-    r: Math.floor(cell.minerals.iron * ((!cell.isLand && !cell.isShallowWater) ? 80 : 255)),
-    g: Math.floor(cell.minerals.copper * ((!cell.isLand && !cell.isShallowWater) ? 80 : 255)),
-    b: Math.floor(cell.minerals.manganese * ((!cell.isLand && !cell.isShallowWater) ? 80 : 255)),
-  }),
-  'moisture': function(cell) {
-    if (!cell.isLand) return { r: 25, g: 35, b: 55 };
-    const p = cell.precipitation;
-    return { r: 10, g: Math.floor(20 + p * 80), b: Math.floor(40 + p * 200) };
-  },
-  'precipitation': function(cell) {
-    if (!cell.isLand) return { r: 25, g: 35, b: 55 };
-    const p = cell.precipitation;
-    return { r: 10, g: Math.floor(20 + p * 80), b: Math.floor(40 + p * 200) };
-  },
-  'groundwater': function(cell) {
-    if (!cell.isLand) return { r: 15, g: 20, b: 30 };
-    const gw = cell.groundwater;
-    return { r: 10, g: Math.floor(30 + gw * 150), b: Math.floor(40 + gw * 120) };
-  },
-  'waterAvail': function(cell) {
-    if (!cell.isLand) return { r: 15, g: 20, b: 30 };
-    const wa = cell.waterAvailability;
-    return { r: 10, g: Math.floor(30 + wa * 170), b: Math.floor(20 + wa * 100) };
-  },
-  'wind': function(cell) {
-    if (cell.isLand) {
-      const e = clamp(cell.elevation, 0, 0.6);
-      return { r: Math.floor(35 + e * 40), g: Math.floor(30 + e * 35), b: Math.floor(25 + e * 25) };
-    }
-    return { r: 20, g: 25, b: 38 };
-  },
-  'currents': function(cell) {
-    if (cell.isLand) return { r: 18, g: 18, b: 18 };
-    const sst = cell.sst;
-    if (sst < 0.5) {
-      const t = sst / 0.5;
-      return { r: Math.floor(15 + t * 20), g: Math.floor(25 + t * 30), b: Math.floor(60 + t * 30) };
-    } else {
-      const t = (sst - 0.5) / 0.5;
-      return { r: Math.floor(35 + t * 35), g: Math.floor(55 - t * 20), b: Math.floor(90 - t * 50) };
-    }
-  },
-  'floraType': function(cell) {
-    if (cell.floraType === 'photosynthetic') return { r: 128, g: 32, b: 32 };
-    if (cell.floraType === 'chemotrophic')   return { r: 80, g: 32, b: 96 };
-    if (cell.floraType === 'mixotrophic')    return { r: 112, g: 48, b: 64 };
-    if (cell.floraType === 'barren')         return { r: 64, g: 64, b: 64 };
-    if (cell.floraType === 'frozen')         return { r: 192, g: 192, b: 200 };
-    return { r: 16, g: 32, b: 48 };
-  },
-  'floraDensity': function(cell) {
-    if (!cell.isLand) return { r: 10, g: 20, b: 35 };
-    if (cell.floraType === 'barren' || cell.floraType === 'frozen') return { r: 32, g: 32, b: 32 };
-    const d = clamp(cell.floraDensity, 0, 1);
-    const base = overlayFunctions['floraType'](cell);
-    return {
-      r: Math.floor(base.r * (0.3 + d * 0.7)),
-      g: Math.floor(base.g * (0.3 + d * 0.7)),
-      b: Math.floor(base.b * (0.3 + d * 0.7)),
-    };
-  },
-};
-
-function getColorFn(overlay) {
-  return overlayFunctions[overlay] || overlayFunctions['surface'];
-}
-
 const overlays = {
 
   surface(gi) {
@@ -319,122 +170,28 @@ function overlayFlora(gi) {
   return { r, g, b };
 }
 
-// Compatibility wrapper: legacy callers expect [r,g,b]
-function overlayColorAt(gi, overlayName) {
-  const fn = overlays[overlayName] || overlays.surface;
-  const c = fn(gi);
-  return { r: c.r, g: c.g, b: c.b };
-}
-
-function hiResColorAt(hi, overlay) {
-  if (overlay === 'surface') {
-    return [state.hiResData.colorR[hi], state.hiResData.colorG[hi], state.hiResData.colorB[hi]];
-  }
-  if (overlay === 'terrainType') {
-    const colors = [[40,40,40],[10,18,45],[28,45,85],[85,65,38],[75,100,45],[110,82,50],[155,140,100],[92,88,78],[165,145,100]];
-    const c = colors[state.hiResData.terrainType[hi]] || colors[0];
-    const ct = state.hiResData.coverType[hi];
-    const dim = (ct >= 1 && ct <= 2) ? 0.55 : ct >= 3 ? 0.75 : 1.0;
-    return [(c[0]*dim)|0, (c[1]*dim)|0, (c[2]*dim)|0];
-  }
-  if (overlay === 'floraDensity' || overlay === 'floraType') {
-    const ft = state.hiResData.floraType[hi];
-    const cd = state.hiResData.canopyDensity[hi];
-    const gc = state.hiResData.groundCover[hi];
-    let r, g, b;
-    if (!state.hiResData.isLand[hi]) { r = 10; g = 15; b = 30; }
-    else if (state.hiResData.isFreezing[hi]) { r = 192; g = 192; b = 200; }
-    else if (ft === 0) { r = 45; g = 40; b = 30; }
-    else if (ft === 1) { r = (40 + gc * 55)|0; g = (12 + gc * 6)|0;  b = (12 + gc * 8)|0; }
-    else if (ft === 2) { r = (25 + gc * 18)|0; g = (18 + gc * 12)|0; b = (35 + gc * 45)|0; }
-    else if (ft === 3) { r = (35 + gc * 30)|0; g = (12 + gc * 8)|0;  b = (25 + gc * 22)|0; }
-    else { r = 40; g = 40; b = 40; }
-    if (cd > 0.15 && state.hiResData.isLand[hi] && !state.hiResData.isFreezing[hi]) { r = (r*0.6)|0; g = (g*0.6)|0; b = (b*0.6)|0; }
-    return [r, g, b];
-  }
-  if (overlay === 'saturation') {
-    if (!state.hiResData.isLand[hi]) return [10, 18, 45];
-    const s = state.hiResData.saturation[hi];
-    return [(110 - s*90)|0, (75 + s*35)|0, (25 + s*110)|0];
-  }
-  if (overlay === 'substrate') {
-    if (!state.hiResData.isLand[hi]) return [15, 18, 25];
-    const gs = state.hiResData.grainSize[hi];
-    if (gs < 0.2) return [55, 65, 85];
-    if (gs < 0.45) { const f=(gs-0.2)/0.25; return [(55+f*75)|0,(65+f*45)|0,(85-f*45)|0]; }
-    if (gs < 0.65) { const f=(gs-0.45)/0.2; return [(130+f*45)|0,(110+f*25)|0,(40+f*8)|0]; }
-    const f=(gs-0.65)/0.35; return [(175-f*70)|0,(135-f*50)|0,(48+f*35)|0];
-  }
-  if (overlay === 'drainage') {
-    if (!state.hiResData.isLand[hi]) return [12, 20, 40];
-    const so = state.hiResData.streamOrder[hi];
-    if (so >= 3) return [70, 150, 220];
-    if (so === 2) return [55, 115, 180];
-    if (so === 1) return [45, 85, 130];
-    return [40, 46, 42];
-  }
-  // Fallback: surface
-  return [state.hiResData.colorR[hi], state.hiResData.colorG[hi], state.hiResData.colorB[hi]];
-}
-
-// Render the flat 1024×512 canvas by downsampling the high-res grid.
-function renderFlatFromHighRes(overlay) {
-  imageData = ctx.createImageData(1024, 512);
-  const d = imageData.data;
-  const CW = 1024, CH = 512;
-  for (let cy = 0; cy < CH; cy++) {
-    const hy = ((cy * HR_H / CH) | 0);
-    const rowBase = hy * HR_W;
-    for (let cx = 0; cx < CW; cx++) {
-      const hx = ((cx * HR_W / CW) | 0);
-      const rgb = hiResColorAt(rowBase + hx, overlay);
-      const off = (cy * CW + cx) * 4;
-      d[off] = rgb[0]; d[off + 1] = rgb[1]; d[off + 2] = rgb[2]; d[off + 3] = 255;
-    }
-  }
-  ctx.putImageData(imageData, 0, 0);
-}
-
 // ── Flat map renderer ──
 function render(overlay) {
-  if (state.planet) {
-    const CW = 1024, CH = 512;
-    imageData = ctx.createImageData(CW, CH);
-    const d = imageData.data;
-    const fn = overlays[overlay] || overlays.surface;
-    for (let cy = 0; cy < CH; cy++) {
-      const gy = (cy * state.HR_H / CH) | 0;
-      const rowBase = gy * state.HR_W;
-      for (let cx = 0; cx < CW; cx++) {
-        const gx = (cx * state.HR_W / CW) | 0;
-        const col = fn(rowBase + gx);
-        const off = (cy * CW + cx) * 4;
-        d[off] = col.r; d[off + 1] = col.g; d[off + 2] = col.b; d[off + 3] = 255;
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    if (overlay === 'wind')     drawStreamlines(ctx, 'wind', 1024, 512);
-    else if (overlay === 'currents') drawStreamlines(ctx, 'currents', 1024, 512);
-
-    drawSelectionMarker();
-    return;
-  }
-
-  // Fallback (surface allocation failed / OOM): legacy low-res cells path.
-  if (!state.cells) return;
-  imageData = ctx.createImageData(1024, 512);
-  const colorFn = getColorFn(overlay);
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const c = state.cells[y * W + x];
-      const col = colorFn(c);
-      setPixel2x(x, y, col.r, col.g, col.b);
+  if (!state.planet) return;
+  const CW = 1024, CH = 512;
+  imageData = ctx.createImageData(CW, CH);
+  const d = imageData.data;
+  const fn = overlays[overlay] || overlays.surface;
+  for (let cy = 0; cy < CH; cy++) {
+    const gy = (cy * state.HR_H / CH) | 0;
+    const rowBase = gy * state.HR_W;
+    for (let cx = 0; cx < CW; cx++) {
+      const gx = (cx * state.HR_W / CW) | 0;
+      const col = fn(rowBase + gx);
+      const off = (cy * CW + cx) * 4;
+      d[off] = col.r; d[off + 1] = col.g; d[off + 2] = col.b; d[off + 3] = 255;
     }
   }
   ctx.putImageData(imageData, 0, 0);
-  if (overlay === 'wind')          drawStreamlines(ctx, 'wind', 1024, 512);
+
+  if (overlay === 'wind')     drawStreamlines(ctx, 'wind', 1024, 512);
   else if (overlay === 'currents') drawStreamlines(ctx, 'currents', 1024, 512);
+
   drawSelectionMarker();
 }
 
@@ -616,7 +373,7 @@ function mollweidePixelToCell(px, py) {
 }
 
 function renderMollweide() {
-  if (!state.cells) return;
+  if (!state.planet) return;
   const mw = mollweideCanvas.width, mh = mollweideCanvas.height;
   const mImageData = mollweideCtx.createImageData(mw, mh);
   const data = mImageData.data;
@@ -625,62 +382,29 @@ function renderMollweide() {
     data[i] = 5; data[i + 1] = 8; data[i + 2] = 16; data[i + 3] = 255;
   }
 
-  if (state.planet) {
-    const flat = ctx.getImageData(0, 0, 1024, 512).data;
-    const scale = 0.92;
-    for (let py = 0; py < mh; py++) {
-      for (let px = 0; px < mw; px++) {
-        const mx = ((px / mw - 0.5) / scale) * (2 * Math.SQRT2);
-        const my = ((0.5 - py / mh) / scale) * (2 * Math.SQRT2);
-        const ex = mx / (2 * Math.SQRT2), ey = my / Math.SQRT2;
-        if (ex * ex + ey * ey > 1.0) continue;
-        const sinTheta = clamp(my / Math.SQRT2, -1, 1);
-        const theta = Math.asin(sinTheta);
-        const cosTheta = Math.cos(theta);
-        if (Math.abs(cosTheta) < 1e-10) continue;
-        const lon = (mx * Math.PI) / (2 * Math.SQRT2 * cosTheta);
-        if (lon < -Math.PI || lon > Math.PI) continue;
-        const sinLat = clamp((2 * theta + Math.sin(2 * theta)) / Math.PI, -1, 1);
-        const lat = Math.asin(sinLat);
-        const tx = Math.min(1023, Math.max(0, ((lon + Math.PI) / (2 * Math.PI)) * 1024 | 0));
-        const ty = Math.min(511, Math.max(0, ((lat + Math.PI / 2) / Math.PI) * 512 | 0));
-        const src = (ty * 1024 + tx) * 4;
-        const off = (py * mw + px) * 4;
-        data[off] = flat[src]; data[off + 1] = flat[src + 1]; data[off + 2] = flat[src + 2]; data[off + 3] = 255;
-      }
-    }
-    mollweideCtx.putImageData(mImageData, 0, 0);
-    drawSelectionMarker();
-    return;
-  }
-
-  const overlaySelect = document.getElementById('overlaySelect');
-  const colorFn = getColorFn(overlaySelect.value);
-
-  for (let cy = 0; cy < H; cy++) {
-    for (let cx = 0; cx < W; cx++) {
-      const pos = mollweideProject(cx, cy, mw, mh);
-      const cell = state.cells[cy * W + cx];
-      const col = colorFn(cell);
-
-      const px0 = Math.round(pos.x);
-      const py0 = Math.round(pos.y);
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const px = px0 + dx;
-          const py = py0 + dy;
-          if (px >= 0 && px < mw && py >= 0 && py < mh) {
-            const off = (py * mw + px) * 4;
-            data[off] = col.r;
-            data[off + 1] = col.g;
-            data[off + 2] = col.b;
-            data[off + 3] = 255;
-          }
-        }
-      }
+  const flat = ctx.getImageData(0, 0, 1024, 512).data;
+  const scale = 0.92;
+  for (let py = 0; py < mh; py++) {
+    for (let px = 0; px < mw; px++) {
+      const mx = ((px / mw - 0.5) / scale) * (2 * Math.SQRT2);
+      const my = ((0.5 - py / mh) / scale) * (2 * Math.SQRT2);
+      const ex = mx / (2 * Math.SQRT2), ey = my / Math.SQRT2;
+      if (ex * ex + ey * ey > 1.0) continue;
+      const sinTheta = clamp(my / Math.SQRT2, -1, 1);
+      const theta = Math.asin(sinTheta);
+      const cosTheta = Math.cos(theta);
+      if (Math.abs(cosTheta) < 1e-10) continue;
+      const lon = (mx * Math.PI) / (2 * Math.SQRT2 * cosTheta);
+      if (lon < -Math.PI || lon > Math.PI) continue;
+      const sinLat = clamp((2 * theta + Math.sin(2 * theta)) / Math.PI, -1, 1);
+      const lat = Math.asin(sinLat);
+      const tx = Math.min(1023, Math.max(0, ((lon + Math.PI) / (2 * Math.PI)) * 1024 | 0));
+      const ty = Math.min(511, Math.max(0, ((lat + Math.PI / 2) / Math.PI) * 512 | 0));
+      const src = (ty * 1024 + tx) * 4;
+      const off = (py * mw + px) * 4;
+      data[off] = flat[src]; data[off + 1] = flat[src + 1]; data[off + 2] = flat[src + 2]; data[off + 3] = 255;
     }
   }
-
   mollweideCtx.putImageData(mImageData, 0, 0);
   drawSelectionMarker();
 }
@@ -909,6 +633,5 @@ export {
   render, renderGlobe, renderMollweide,
   drawSelectionMarker, drawStreamlines,
   overlays,
-  mollweideProject, mollweidePixelToCell, globePixelToCell, globeCellToPixel,
-  getColorFn
+  mollweideProject, mollweidePixelToCell, globePixelToCell, globeCellToPixel
 };
