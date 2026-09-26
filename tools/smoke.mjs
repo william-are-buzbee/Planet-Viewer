@@ -108,6 +108,9 @@ for (let rx = 0; rx < REGIONAL_SIZE; rx += 3) for (let ry = 0; ry < REGIONAL_SIZ
   if (c.hasWater) rWater++;
 }
 check(rNaN === 0, 'no NaN in regional elevation / saturation');
+let rMaxElev = -Infinity, rSpanMin = Infinity;
+for (let rx = 0; rx < REGIONAL_SIZE; rx += 3) for (let ry = 0; ry < REGIONAL_SIZE; ry += 3) { const e = rc[rx][ry].elevation; if (e > rMaxElev) rMaxElev = e; if (e < rSpanMin) rSpanMin = e; }
+check(rMaxElev > 1 && rMaxElev < 12000, `regional elevation is in metres (max ${rMaxElev.toFixed(0)} m in this window)`);
 check(rLand > 0, 'regional window contains land');
 const centre = rc[REGIONAL_SIZE / 2][REGIONAL_SIZE / 2];
 check(Math.abs(centre.worldX / REGIONAL_SIZE - (px + 0.5)) < 1e-3, 'regional window is centred on the requested point (A3)');
@@ -136,6 +139,12 @@ say(`tile     ${Math.sqrt(CHUNK_TOTAL)}²  ${(performance.now() - t0).toFixed(0)
 const t = state.currentTileData && state.currentTileData.tiles;
 check(!!t && t.elevation.length === CHUNK_TOTAL, 'tile chunk populated');
 check(t && !hasNaN(t.elevation) && !hasNaN(t.saturation), 'no NaN in tile elevation / saturation');
+check(Math.sqrt(CHUNK_TOTAL) === 128, 'tile chunk is 128×128 (one regional cell, ≈1.19 m tiles)');
+{
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < CHUNK_TOTAL; i++) { const e = t.elevation[i]; if (e < mn) mn = e; if (e > mx) mx = e; }
+  check(mx - mn < 15, `tile micro-relief inside one regional cell is metres-scale (${(mx - mn).toFixed(2)} m)`);
+}
 check(state.tileChunkCache.has(`${rx},${ry}`), 'tile chunk cached');
 
 say(failures.length ? `\n${failures.length} FAILED` : '\nall checks passed');

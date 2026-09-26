@@ -68,8 +68,8 @@ export const state = {
     erosionPasses: 4,
     erosionRate: 0.18,
     blendWidth: 6,
-    coastAmplitude: 0.10,
-    mountainDetail: 0.05,
+    regionalDetailAmpM: 60,       // metres of isotropic regional detail (10 km wavelength)
+    regionalMountainAmpM: 120,    // extra metres at the planet's highest land, scaled by elevation
     windBlockingStrength: 8.0,
     windDeflectionFactor: 0.5,
     windDeflectionPasses: 3,

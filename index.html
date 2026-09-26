@@ -601,7 +601,7 @@ canvas.hidden-canvas {
     </div>
   </div>
   <div class="regional-panel" id="regionalPanel">
-    <div class="regional-placeholder" id="regionalPlaceholder">Click a cell on any map view to generate a high-resolution regional detail view (~1 km per cell).</div>
+    <div class="regional-placeholder" id="regionalPlaceholder">Click a cell on any map view to generate a regional detail view (78 km window, ~150 m per cell). Click a regional cell for its tiles (~1.2 m per tile).</div>
     <div id="regionalActive" style="display:none;">
       <div class="regional-header" id="regionalHeader">
         <span class="region-label" id="regionLabel">REGION: (—, —)</span>
@@ -647,7 +647,7 @@ canvas.hidden-canvas {
         <button class="close-btn" id="tileCloseBtn" title="Close tile view">✕</button>
       </div>
       <div class="regional-canvas-wrap" id="tileCanvasWrap">
-        <canvas id="tileCanvas" width="512" height="512"></canvas>
+        <canvas id="tileCanvas" width="128" height="128"></canvas>
       </div>
     </div>
   </div>

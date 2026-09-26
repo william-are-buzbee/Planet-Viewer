@@ -13,9 +13,11 @@ import {
 } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
 import { REGIONAL_SIZE } from './regional-gen.js';
+import { TILES_PER_REGIONAL_CELL } from './regional-constants.js';
 import { renderRegionalMap, renderTileDetail } from './regional-render.js';
 
-const CHUNK_W = 512, CHUNK_H = 512;
+// One chunk covers exactly one regional cell (≈152 m) → ≈1.19 m per tile.
+const CHUNK_W = TILES_PER_REGIONAL_CELL, CHUNK_H = TILES_PER_REGIONAL_CELL;
 const CHUNK_TOTAL = CHUNK_W * CHUNK_H;
 
 // ── Sprite Variant Selection (physical state → texture index) ──
@@ -82,14 +84,16 @@ function selectSpriteVariant(terrainType, coverType, physical, wx, wy) {
     return { ground, cover };
 }
 
-// Per-zone tile topography parameters
+// Per-zone tile topography parameters.
+//   channelSpacing: tiles (≈1.19 m each) between micro-channels
+//   channelDepth, ridgeAmp: METRES of micro-relief added inside one regional cell
 const tileZoneParams = {
-  summit:      { channelSpacing: 25,  channelDepth: 0.006, anisotropy: 0.30, ridgeAmp: 0.050 },
-  upper_slope: { channelSpacing: 35,  channelDepth: 0.009, anisotropy: 0.50, ridgeAmp: 0.040 },
-  mid_slope:   { channelSpacing: 55,  channelDepth: 0.011, anisotropy: 0.65, ridgeAmp: 0.030 },
-  lowland:     { channelSpacing: 90,  channelDepth: 0.008, anisotropy: 0.75, ridgeAmp: 0.018 },
-  coastal:     { channelSpacing: 120, channelDepth: 0.005, anisotropy: 0.60, ridgeAmp: 0.012 },
-  tidal:       { channelSpacing: 150, channelDepth: 0.003, anisotropy: 0.50, ridgeAmp: 0.008 },
+  summit:      { channelSpacing: 6,  channelDepth: 0.30, anisotropy: 0.30, ridgeAmp: 2.0 },
+  upper_slope: { channelSpacing: 9,  channelDepth: 0.40, anisotropy: 0.50, ridgeAmp: 1.5 },
+  mid_slope:   { channelSpacing: 14, channelDepth: 0.50, anisotropy: 0.65, ridgeAmp: 1.2 },
+  lowland:     { channelSpacing: 22, channelDepth: 0.40, anisotropy: 0.75, ridgeAmp: 0.8 },
+  coastal:     { channelSpacing: 30, channelDepth: 0.25, anisotropy: 0.60, ridgeAmp: 0.5 },
+  tidal:       { channelSpacing: 38, channelDepth: 0.15, anisotropy: 0.50, ridgeAmp: 0.3 },
 };
 
 
@@ -194,8 +198,10 @@ function sampleRegionalContext(rx, ry) {
     zone: centre.zone,
     slopeDirection: centre.slopeDir,
     slopeMagnitude: centre.slopeMag,
-    worldX: rx * CHUNK_W,
-    worldY: ry * CHUNK_H,
+    // Global tile coordinates (regional cell's world coordinate × tiles per cell), so
+    // tile noise is unique per region and continuous across regional-cell edges.
+    worldX: centre.worldX * CHUNK_W,
+    worldY: centre.worldY * CHUNK_H,
     seed: 0,
     elevation, precipitation, groundwater, waterAvailability, temperature,
     grainSizeRegional, iron, copper, manganese,
@@ -248,7 +254,7 @@ function generateTileTopography(context) {
       let elev = base + ridge * ridgeAmp - channelCarve;
 
       // Land preservation: interior land shouldn't dip to ocean from detail alone
-      if (base > 0.01 && elev < 0.0005) elev = 0.0005;
+      if (base > 1 && elev < 0.05) elev = 0.05;   // metres
 
       out[ti] = elev;
     }
@@ -316,7 +322,7 @@ function computeTileDrainage(tileElevation, tilePrecip, Wt, Ht) {
 // ── Water coherence constants ──
 const MIN_BASIN_AREA      = 8;    // tiles — minimum pond size
 const MAX_BASIN_AREA      = Math.floor(CHUNK_TOTAL * 0.02);  // tiles — max 2% of chunk per basin
-const MIN_BASIN_DEPTH     = 0.0015;// elevation units — minimum depression depth for ponding
+const MIN_BASIN_DEPTH     = 0.10; // metres — minimum depression depth for ponding
 const MIN_WATER_FEATURE   = 8;    // tiles — connected component size threshold
 const SHORELINE_DISTANCE  = 4;    // tiles — how far the wet-bank transition extends
 const CHANNEL_WATER_ORDER = 3;    // minimum stream order for visible channel water
@@ -363,13 +369,14 @@ function computeTileWaterBodies(tileElevation, streamOrder, context, zone) {
   // Target: ~15-25% of total relief for each zone.
   let pourTolerance;
   switch (zone) {
-    case 'lowland':     pourTolerance = 0.004;  break;  // relief ~0.026
-    case 'coastal':     pourTolerance = 0.003;  break;  // relief ~0.017
-    case 'tidal':       pourTolerance = 0.002;  break;  // relief ~0.011
-    case 'mid_slope':   pourTolerance = 0.007;  break;  // relief ~0.041
-    case 'upper_slope': pourTolerance = 0.010;  break;  // relief ~0.049
-    case 'summit':      pourTolerance = 0.012;  break;  // relief ~0.056
-    default:            pourTolerance = 0.005;  break;
+    // metres; ~20 % of the zone's micro-relief (ridgeAmp + channelDepth)
+    case 'lowland':     pourTolerance = 0.25;  break;  // relief ~1.2 m
+    case 'coastal':     pourTolerance = 0.15;  break;  // relief ~0.75 m
+    case 'tidal':       pourTolerance = 0.10;  break;  // relief ~0.45 m
+    case 'mid_slope':   pourTolerance = 0.35;  break;  // relief ~1.7 m
+    case 'upper_slope': pourTolerance = 0.40;  break;  // relief ~1.9 m
+    case 'summit':      pourTolerance = 0.45;  break;  // relief ~2.3 m
+    default:            pourTolerance = 0.25;  break;
   }
 
   // Regional saturation at the chunk center (used to filter dry-zone basins)
@@ -770,8 +777,6 @@ function generateTileDetail(rx, ry) {
 
   // T1: context
   const context = sampleRegionalContext(rx, ry);
-  context.worldX = rx * CHUNK_W;
-  context.worldY = ry * CHUNK_H;
   context.seed = seed;
 
   // T2: topography

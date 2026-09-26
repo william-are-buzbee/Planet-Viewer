@@ -63,14 +63,14 @@ re-implemented per layer.
 | Planetary | 512×256 | whole planet (≈40,000 km circumference) | ≈78 km | 131k JS objects, ~45 props each |
 | Hi-res | 512m×256m (m = 1,2,4,8) | whole planet | 78 / 39 / 19.5 / 9.75 km | typed arrays, ~101 B/cell (≈212 MB at ×4, ≈850 MB at ×8) |
 | Regional | 512×512 | **one** planetary cell (78 km) | ≈152 m | 262k JS objects, 59 props each ≈ **221 MB per region** |
-| Tile | 512×512 | one regional cell (152 m) | ≈**0.30 m** | typed arrays, ~15 MB per chunk |
+| Tile | ~~512×512~~ **128×128** (since B5) | one regional cell (152 m) | ~~0.30 m~~ **≈1.19 m** | typed arrays, ~1 MB per chunk |
 
 Two things stand out immediately:
 
 - The regional placeholder text in `index.html` says "~1 km per cell". It is 152 m. The
   design drifted (probably from a 512-km "US state" region to a 78-km one) and the docs did not.
-- A tile is 30 cm. Roguelike tiles are conventionally 1–2 m. The 512×512 chunk is a 150 m
-  square, not a play area.
+- A tile *was* 30 cm; roguelike tiles are conventionally 1–2 m. B5 made a chunk 128×128 tiles
+  of ≈1.19 m (still exactly one regional cell).
 
 ### 1.3 Coordinate conventions (where the layers disagree)
 
@@ -82,7 +82,7 @@ Two things stand out immediately:
 - Regional world coordinates are `planetaryX * 512 + rx` (global, seamless across regions).
   Tile world coordinates are `rx * 512 + tx` (region-relative, **not** global), so tile noise
   repeats identically in every region.
-- Elevation has no defined unit (see Finding B1).
+- Elevation *had* no defined unit (see Finding B1; resolved in §8 — `units.js`).
 
 ---
 
@@ -273,11 +273,13 @@ work; do it together with B3 so both grids end up with one accessor convention.
 
 ### Tier C — design points to settle before more features
 
-**C1. Land fraction.** Default `continentalBase = −0.08` puts continental crust *below* sea
-level on average; land is whatever noise, mountains and hotspots push up. Result: 3–11% land
-across three seeds (Earth: 29%). If that is the intent (an ocean world), fine, but the tuning
-panel's "Earth-like" preset (−0.05) will not produce Earth-like land either. Worth a deliberate
-choice; it changes what the regional/tile layers spend most of their time rendering.
+**C1. Land fraction — resolved: intentional.** Default `continentalBase = −0.08` puts
+continental crust *below* sea level on average; land is whatever noise, mountains and hotspots
+push up, giving 3–11% land across three seeds. The person confirmed (26 Sep 2026) that this is
+the design: an archipelago water world, oceanic plates, island chains, perhaps a continent
+somewhere. **Seed 5 is the anchor world** everything is evaluated against; the planetary and
+hi-res layers are therefore treated as tuned and are not rescaled. The "Earth-like" preset name
+is misleading for this planet and can go whenever the presets are next touched.
 
 **C2. One flora fitness function, one water metric.** Photo/chemo/mixo fitness is written out in
 four places (`planet-gen.js step5`, `hires-gen.js HR6`, `regional-flora.js ×2`) with three
@@ -401,6 +403,39 @@ status instead of falling through to a renderer that no longer exists.
   measurement tool.
 
 ---
+
+## 8. B1 + B5 — applied (units and tile size)
+
+Decisions (the person, 26 Sep 2026): metres, with 1.0 planet unit = 10 km; 128×128 tiles per
+regional cell; the archipelago land fraction stays.
+
+- **`units.js`** is the one place that says what the numbers mean. The planetary and hi-res grids
+  stay in *planet units* (tuned; seed 5 is the anchor and its planet map is bit-identical before
+  and after). The regional layer converts once, when it samples the hi-res elevation in Pass 1a;
+  from there down everything is **metres**. Water table depth and water depth are declared metres
+  everywhere (the hi-res proxy is read as 1.0 = 1 m, which is what the code already assumed).
+- `deriveTerrainAndCover` takes metres; the planetary and hi-res callers convert with `puToM()`.
+- Regional detail noise is now 60 m (+120 m at the planet's highest land) instead of 1,000 m;
+  channel relief 2–10 m instead of 10–180 m; tidal zone is water shallower than 5 m; shelf,
+  coastal and deep-water thresholds are the planet's own values expressed in metres. The two
+  regional sliders are `regionalDetailAmpM` and `regionalMountainAmpM`.
+- Tile chunks are 128×128 (`TILES_PER_REGIONAL_CELL`), ≈1.19 m per tile, with **global** tile
+  coordinates (`regionalCell.worldX × 128 + tx`) so noise no longer repeats per region. Micro-
+  relief is 0.3–2 m ridges and 0.15–0.5 m channels; basins pour at 0.1–0.45 m.
+- Snapshot panel shows metres for all three layers; the regional placeholder text is correct.
+
+| Measurement (seed 5, `tools/probe.mjs` / `tools/smoke.mjs`) | Before | After |
+|---|---|---|
+| Planet: land fraction, elevation range, sentinel-bleed figures | — | **identical** |
+| Regional relief in a 78 km window vs the planet's real relief there | 1,336 m vs 312 m (4.3×) | **345 m vs 312 m (1.1×)** |
+| Relief inside one 152 m regional cell (mid-slope grass) | 352 m | **4.4 m** |
+| Standing-water tiles / stream-order-3 tiles in that dry grass cell | 10.6 % / 4.9 % | 6.7 % / 4.2 % |
+| Tile chunk generation | 576–920 ms | **61 ms** |
+| Smoke test | — | passes, incl. "regional elevation is metres", "tile chunk 128×128", "micro-relief < 15 m" |
+
+Still open from this table: tile-scale hydrology (6.7 % standing water in a dry cell) is computed
+on the tile's own micro-relief with no inflow from the regional drainage; that is B4's territory,
+now with sane units to work in.
 
 ## Appendix A — Dead code inventory (deleted in B2; kept as the record of what was there)
 

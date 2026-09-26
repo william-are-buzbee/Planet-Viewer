@@ -9,7 +9,7 @@ import { SHALLOW_WATER_TERRAIN_THRESHOLD, intToTerrainType, intToCoverType,
   TT_DIRT, TT_SAND, TT_ROCK, TT_BEACH,
   CT_NONE } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical, regionalPhysical } from './palette-compute.js';
-import { REGIONAL_SIZE, CELLS_PER_PLANETARY, getPlanetMaxLandElev } from './regional-gen.js';
+import { REGIONAL_SIZE, CELLS_PER_PLANETARY, getPlanetMaxLandElevM } from './regional-gen.js';
 import { CHUNK_W, CHUNK_H, CHUNK_TOTAL } from './tile-gen.js';
 
 // ── Cell-object colour helpers (regional cells carry named fields) ──
@@ -84,7 +84,7 @@ const regionalOverlayFunctions = {
   },
   'topographic': function(cell) {
     if (!cell.isLand) return cell.isDeepWater ? { r: 10, g: 22, b: 40 } : { r: 26, g: 48, b: 80 };
-    const maxLand = getPlanetMaxLandElev();
+    const maxLand = getPlanetMaxLandElevM();
     const t = clamp(cell.baseElevation / maxLand, 0, 1);
     return lerpColor({ r: 60, g: 75, b: 55 }, { r: 200, g: 185, b: 160 }, t);
   },
@@ -284,6 +284,11 @@ function renderTileDetail(overlay) {
   if (!state.currentTileData) return;
   const fn = tileOverlays[overlay] || tileOverlays['surface'];
   const t = state.currentTileData.tiles;
+  // The canvas backing store matches the chunk; CSS scales it up (pixelated).
+  if (tileCanvas.width !== CHUNK_W || tileCanvas.height !== CHUNK_H) {
+    tileCanvas.width = CHUNK_W;
+    tileCanvas.height = CHUNK_H;
+  }
   const img = tileCtx.createImageData(CHUNK_W, CHUNK_H);
   const data = img.data;
   for (let i = 0; i < CHUNK_TOTAL; i++) {

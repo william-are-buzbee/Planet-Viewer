@@ -10,6 +10,7 @@ import {
 import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD } from './terrain-derive.js';
 import { REGIONAL_SIZE, CELLS_PER_PLANETARY, PLANETARY_CELL_KM, REGIONAL_CELL_KM, HR_FLORA_NAMES } from './regional-constants.js';
 import { computeRegionalDrainage } from './regional-drainage.js';
+import { ELEV_UNIT_M, SHELF_DEPTH_M, COASTAL_ELEV_M } from './units.js';
 import { refineRegionalSubstrateFromHiRes } from './regional-substrate.js';
 import { refineRegionalFloraFromHiRes, deriveWTDWater } from './regional-flora.js';
 
@@ -49,12 +50,15 @@ export function getPlanetMaxLandElev() {
   _planetMaxLandElev = m;
   return m;
 }
+// Same, in metres — the regional and tile layers work in metres (units.js).
+export function getPlanetMaxLandElevM() { return getPlanetMaxLandElev() * ELEV_UNIT_M; }
 
-// ── Zone classification from elevation + slope ──
+// ── Zone classification from elevation (metres) + slope ──
+const TIDAL_DEPTH_M = 5;   // water shallower than this is the tidal zone
 
 function classifyZone(elevation, slopeMag, maxLandElev) {
   if (elevation <= 0) {
-    return elevation > -0.02 ? 'tidal' : 'coastal';
+    return elevation > -TIDAL_DEPTH_M ? 'tidal' : 'coastal';
   }
   const en = elevation / maxLandElev;
   if (en < 0.06) return 'lowland';
@@ -74,7 +78,7 @@ function classifyZone(elevation, slopeMag, maxLandElev) {
 function generateRegionalDetail(centerX, centerY) {
   const _t0 = performance.now();
   _planetMaxLandElev = null; // recompute per generation
-  const maxLand = getPlanetMaxLandElev();
+  const maxLand = getPlanetMaxLandElevM();   // metres
 
   const seed = state.seed | 0;
   const regionSeed = (seed ^ 0x51ED270B) | 0;
@@ -118,7 +122,8 @@ function generateRegionalDetail(centerX, centerY) {
       const hx = px * state.hiResMultiplier;
       const hy = py * state.hiResMultiplier;
       const padIdx = (ry + MARGIN) * S_PAD + (rx + MARGIN);
-      baseElevPad[padIdx] = bilinearSampleHR(state.hiResData.elevation, hx, hy, state.HR_W, state.HR_H);
+      // Planet units → METRES here; everything below this line is metres (units.js).
+      baseElevPad[padIdx] = bilinearSampleHR(state.hiResData.elevation, hx, hy, state.HR_W, state.HR_H) * ELEV_UNIT_M;
       // Store interior coordinate arrays
       if (rx >= 0 && rx < S && ry >= 0 && ry < S) {
         const idx = ry * S + rx;
@@ -177,8 +182,8 @@ function generateRegionalDetail(centerX, centerY) {
       slopeMagPad[idx] = localSlopeMag;
 
       // Blend: steep terrain uses local slope, flat terrain uses wide gradient
-      const FLAT_THRESH  = 0.0015;
-      const STEEP_THRESH = 0.005;
+      const FLAT_THRESH  = 0.0015 * ELEV_UNIT_M;   // 15 m per cell (Sobel-scaled), was 0.0015 planet units
+      const STEEP_THRESH = 0.005 * ELEV_UNIT_M;    // 50 m per cell
       const t = clamp((localSlopeMag - FLAT_THRESH) / (STEEP_THRESH - FLAT_THRESH), 0, 1);
 
       if (t > 0.01 && localSlopeRaw > 0.0001) {
@@ -212,7 +217,7 @@ function generateRegionalDetail(centerX, centerY) {
       const worldY = originWorldY + (ry - MARGIN);
 
       // Only perturb on flat terrain — steep slopes have reliable slope direction
-      const flatness = clamp(1.0 - slopeMagPad[idx] / 0.005, 0, 1);
+      const flatness = clamp(1.0 - slopeMagPad[idx] / (0.005 * ELEV_UNIT_M), 0, 1);
       if (flatness < 0.05) continue;
 
       // Low-frequency angular offset
@@ -267,9 +272,9 @@ function generateRegionalDetail(centerX, centerY) {
       const elevNorm = clamp(baseElev / maxLand, -1, 1);
       let detailAmp;
       if (baseElev <= 0) {
-        detailAmp = state.params.coastAmplitude * 0.4;
+        detailAmp = state.params.regionalDetailAmpM * 0.4;          // seabed: gentler
       } else {
-        detailAmp = state.params.coastAmplitude + state.params.mountainDetail * elevNorm;
+        detailAmp = state.params.regionalDetailAmpM + state.params.regionalMountainAmpM * elevNorm;   // metres
       }
 
       // ── Anisotropic channel noise (aligned with drainage direction) ──
@@ -311,13 +316,14 @@ function generateRegionalDetail(centerX, centerY) {
         const zoneLocal = classifyZone(baseElev, slopeMagLocal, maxLand);
         let channelAmp;
         switch (zoneLocal) {
-          case 'lowland':     channelAmp = 0.018; break;
-          case 'coastal':     channelAmp = 0.010; break;
-          case 'tidal':       channelAmp = 0.006; break;
-          case 'mid_slope':   channelAmp = 0.006; break;
-          case 'upper_slope': channelAmp = 0.003; break;
-          case 'summit':      channelAmp = 0.001; break;
-          default:            channelAmp = 0.008; break;
+          // metres of ridge-to-channel relief (were 0.018 … 0.001 planet units = 180 … 10 m)
+          case 'lowland':     channelAmp = 10; break;
+          case 'coastal':     channelAmp = 6;  break;
+          case 'tidal':       channelAmp = 3;  break;
+          case 'mid_slope':   channelAmp = 8;  break;
+          case 'upper_slope': channelAmp = 4;  break;
+          case 'summit':      channelAmp = 2;  break;
+          default:            channelAmp = 6;  break;
         }
 
         channelOffset = channelNoise * channelAmp;
@@ -514,8 +520,8 @@ function generateRegionalDetail(centerX, centerY) {
       cell.mineralTotal = cell.minerals.iron + cell.minerals.copper + cell.minerals.manganese;
       cell.dominant = maxKey(cell.minerals);
       // Reclassify land/water from the refined elevation (adds coastline detail)
-      cell.isShallowWater = elev > -0.08 && elev <= 0;
-      cell.isDeepWater = elev <= -0.08;
+      cell.isShallowWater = elev > -SHELF_DEPTH_M && elev <= 0;
+      cell.isDeepWater = elev <= -SHELF_DEPTH_M;
       cell.isFreezing = cell.temperature < 0.5;
       state.regionalCells[rx][ry] = cell;
     }
@@ -620,7 +626,7 @@ function deriveRegionalTerrainType(cell) {
     return;
   }
 
-  const isCoastal = cell.elevation > 0 && cell.elevation < 0.03;
+  const isCoastal = cell.elevation > 0 && cell.elevation < COASTAL_ELEV_M;
   const result = deriveTerrainAndCover(
     cell.elevation,
     cell.isLand,

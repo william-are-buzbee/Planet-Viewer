@@ -4,6 +4,7 @@
 
 import { state } from './state.js';
 import { W, H, TOTAL, clamp, getLatitudeBand } from './core-math.js';
+import { puToM } from './units.js';
 import { intToTerrainType, intToCoverType } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
 import {
@@ -293,7 +294,7 @@ const tuningPresets = {
   'Waterworld': { continentalRatio: 0.12, oceanicBase: -0.40, continentalBase: -0.18 },
   'Pangaea': { plateCountBase: 6, continentalRatio: 0.55, minPlateSpacing: 0.6, continentalBase: -0.03 },
   'Archipelago': { plateCountBase: 16, plateCountRange: 6, continentalRatio: 0.18, minPlateSpacing: 0.22, continentalBase: -0.15, continentalNoise: 0.18, oceanicBase: -0.35 },
-  'Mountainous': { collisionHeight: 0.9, arcHeight: 0.7, erosionPasses: 2, mountainDetail: 0.09 },
+  'Mountainous': { collisionHeight: 0.9, arcHeight: 0.7, erosionPasses: 2, regionalMountainAmpM: 250 },
   'Arid': { atmosphericPressure: 0.85, moistureIterations: 50, bgPrecipRate: 0.01, coastalGroundwater: 0.2 },
   'Humid': { atmosphericPressure: 1.4, moistureIterations: 90, oroFactor: 0.6, convFactor: 0.45 },
 };
@@ -437,7 +438,7 @@ function captureSnapshot() {
 
   html += `<div class="snap-section">`;
   html += `<div class="snap-header">PLANET (${px}, ${py}) — ${pBand} ${pPlateType}</div>`;
-  html += `<div class="snap-row"><b>Elev</b> <span class="val">${pc.elevation.toFixed(3)}</span> | <b>Temp</b> <span class="val">${pc.temperature.toFixed(2)}</span> | <b>Wind</b> <span class="val">${(pc.windSpeed || 0).toFixed(2)}</span> (${windDir}°)</div>`;
+  html += `<div class="snap-row"><b>Elev</b> <span class="val">${pc.elevation.toFixed(3)}</span> (${Math.round(puToM(pc.elevation))} m) | <b>Temp</b> <span class="val">${pc.temperature.toFixed(2)}</span> | <b>Wind</b> <span class="val">${(pc.windSpeed || 0).toFixed(2)}</span> (${windDir}°)</div>`;
   html += `<div class="snap-row"><b>Fe</b> <span class="val">${pc.minerals.iron.toFixed(2)}</span> <b>Cu</b> <span class="val">${pc.minerals.copper.toFixed(2)}</span> <b>Mn</b> <span class="val">${pc.minerals.manganese.toFixed(2)}</span> | ${dominant}</div>`;
   html += `<div class="snap-row"><b>Terrain:</b> ${pc.terrainType || '—'}${pc.coverType && pc.coverType !== 'none' ? ' / ' + pc.coverType : ''} | ${pc.isLand ? 'land' : pc.isShallowWater ? 'shallow' : 'deep'}</div>`;
   if (pc.isLand) {
@@ -457,7 +458,7 @@ function captureSnapshot() {
       const rMinerals = rc.minerals || {};
       html += `<div class="snap-section">`;
       html += `<div class="snap-header">REGION (${rx}, ${ry}) — ${rZone} ${rPlate}</div>`;
-      html += `<div class="snap-row"><b>Elev</b> <span class="val">${rc.baseElevation !== undefined ? rc.baseElevation.toFixed(3) : (rc.elevation || 0).toFixed(3)}</span> | <b>Terrain:</b> ${rc.terrainType || '—'} | <b>Cover:</b> ${rc.coverType || 'none'}</div>`;
+      html += `<div class="snap-row"><b>Elev</b> <span class="val">${(rc.baseElevation !== undefined ? rc.baseElevation : (rc.elevation || 0)).toFixed(1)} m</span> | <b>Terrain:</b> ${rc.terrainType || '—'} | <b>Cover:</b> ${rc.coverType || 'none'}</div>`;
       html += `<div class="snap-row"><b>Grain</b> <span class="val">${(rc.grainSize || 0).toFixed(2)}</span> <b>Sat</b> <span class="val">${(rc.saturation || 0).toFixed(2)}</span> | <b>WTD</b> <span class="val">${(rc.waterTableDepth || 0).toFixed(2)}</span> <b>SO</b> <span class="val">${rc.streamOrder || 0}</span></div>`;
       html += `<div class="snap-row"><b>Wet</b> <span class="val">${(rc.wetness || 0).toFixed(2)}</span> <b>WD</b> <span class="val">${(rc.waterDepth || 0).toFixed(2)}</span> | <b>Pela</b> <span class="val">${(rc.pelaRaft || 0).toFixed(2)}</span> <b>Relict</b> <span class="val">${(rc.kolmRelict || 0).toFixed(2)}</span>${(rc.baseCanopy || 0) !== (rc.canopy || 0) ? ' <b>bCan</b> <span class="val">' + ((rc.baseCanopy || 0) * 100).toFixed(0) + '%</span>' : ''}</div>`;
       html += `<div class="snap-row"><b>GC</b> <span class="val">${((rc.groundCover || 0) * 100).toFixed(0)}%</span> <b>Canopy</b> <span class="val">${((rc.canopy || 0) * 100).toFixed(0)}%</span> | <b>Flora:</b> ${rc.floraType || 'barren'}</div>`;
@@ -483,7 +484,7 @@ function captureSnapshot() {
       const spriteVariant = 'v' + t.groundVariant[ti] + (cover !== 'none' ? '/c' + t.coverVariant[ti] : '');
 
       html += `<div class="snap-section">`;
-      html += `<div class="snap-header">TILE (${tx}, ${ty}) — Elev ${t.elevation[ti].toFixed(3)}${!isLand ? ' (ocean)' : ''}</div>`;
+      html += `<div class="snap-header">TILE (${tx}, ${ty}) — Elev ${t.elevation[ti].toFixed(2)} m${!isLand ? ' (ocean)' : ''}</div>`;
       html += `<div class="snap-row"><b>Terrain:</b> ${terrain} | <b>Stream:</b> ${streamNames[t.streamOrder[ti]]} | <b>Sprite:</b> ${spriteName} ${spriteVariant}</div>`;
       html += `<div class="snap-row"><b>Grain</b> <span class="val">${t.grainSize[ti].toFixed(2)}</span> <b>Sat</b> <span class="val">${t.saturation[ti].toFixed(2)}</span> | <b>Water</b> <span class="val">${depthCm < 10 ? depthCm.toFixed(1) : (t.waterDepth[ti]).toFixed(2)} ${depthCm < 10 ? 'cm' : 'm'}</span></div>`;
       html += `<div class="snap-row"><b>Flora:</b> ${floraType} (${t.floraDensity[ti].toFixed(2)}) <b>GC</b> <span class="val">${(t.groundCover[ti] * 100).toFixed(0)}%</span></div>`;
@@ -646,8 +647,8 @@ export function initUI(runGeneration) {
     erosionPasses:      { label: 'Erosion passes',       min: 0,     max: 8,     step: 1,     group: 'Erosion' },
     erosionRate:        { label: 'Erosion rate',          min: 0.04,  max: 0.40,  step: 0.02,  group: 'Erosion' },
     blendWidth:         { label: 'Blend width',           min: 2,     max: 15,    step: 1,     group: 'Blend' },
-    coastAmplitude:     { label: 'Coast amplitude',      min: 0.02,  max: 0.20,  step: 0.01,  group: 'Regional' },
-    mountainDetail:     { label: 'Mountain detail',       min: 0.01,  max: 0.12,  step: 0.01,  group: 'Regional' },
+    regionalDetailAmpM:   { label: 'Regional detail (m)', min: 10,    max: 300,   step: 5,     group: 'Regional' },
+    regionalMountainAmpM: { label: 'Mountain detail (m)', min: 0,     max: 600,   step: 10,    group: 'Regional' },
     windBlockingStrength: { label: 'Blocking strength',  min: 1.0,   max: 20.0,  step: 0.5,   group: 'Wind' },
     windDeflectionFactor: { label: 'Deflection factor',  min: 0.1,   max: 1.0,   step: 0.05,  group: 'Wind' },
     windDeflectionPasses: { label: 'Deflection passes',  min: 1,     max: 6,     step: 1,     group: 'Wind' },
