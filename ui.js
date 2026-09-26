@@ -29,7 +29,7 @@ import {
 // ── Region Cache — stores recent regional grids for instant revisit ──
 // ══════════════════════════════════════════════════════════════════
 const regionCache = new Map();
-const MAX_CACHE_SIZE = 8;
+const MAX_CACHE_SIZE = 2;
 
 function regionCacheKey(cx, cy) {
   // Round to avoid floating-point key mismatches
@@ -58,7 +58,6 @@ function clearRegionCache() {
 // ── Debounced regional navigation state ──
 let _regionPendingTarget = null;
 let _regionIsGenerating = false;
-let _precomputeTimer = null;
 
 // ── Store defaults for reset (initialized lazily to avoid circular-import TDZ) ──
 let defaultParams = null;
@@ -133,21 +132,19 @@ function showRegionalView(planetX, planetY) {
   state.activeControl = 'regional';
   _regionPendingTarget = null;
   _regionIsGenerating = false;
-  cancelPrecomputation();
   hideTileView();
   state.tileChunkCache.clear();
 
   document.getElementById('regionalPlaceholder').style.display = 'none';
   document.getElementById('regionalActive').style.display = 'block';
 
-  const band = getLatitudeBand(Math.round(planetY));
-  const plateCell = getPlanetaryCell(planetX, planetY);
-  regionLabel.textContent = `REGION: (${Math.round(planetX)}, ${Math.round(planetY)}) — ${band}, ${plateCell.plateType}`;
+  updateRegionLabel(planetX, planetY);
 
   // Check cache
   const cached = getCachedRegion(planetX, planetY);
   if (cached) {
     state.regionalCells = cached;
+    state.tileChunkCache.clear();
     renderRegionalMap(regionalOverlaySelect.value);
     statusText.textContent = 'Regional loaded from cache';
   } else {
@@ -167,12 +164,9 @@ function showRegionalView(planetX, planetY) {
   if (state.currentView === 'globe') renderGlobe();
   if (state.currentView === 'mollweide') renderMollweide();
 
-  // Precompute adjacent regions in background
-  precomputeNeighbors(planetX, planetY);
 }
 
 function closeRegionalView() {
-  cancelPrecomputation();
   _regionPendingTarget = null;
   _regionIsGenerating = false;
   state.selectedRegion = null;
@@ -427,8 +421,8 @@ function captureSnapshot() {
 
   let px, py;
   if (state.selectedRegion) {
-    px = Math.round(state.selectedRegion.cx);
-    py = Math.round(state.selectedRegion.cy);
+    px = Math.floor(state.selectedRegion.cx);
+    py = Math.floor(state.selectedRegion.cy);
   } else {
     px = Math.floor(W / 2);
     py = Math.floor(H / 2);
@@ -511,14 +505,9 @@ function captureSnapshot() {
 
 function handleRegionalPan(key) {
   const k0 = performance.now(); // Session 28: arrow key timing
-  // Cancel any background precomputation — user is actively navigating
-  cancelPrecomputation();
 
-  // Close tile view on first pan
-  if (state.currentTileData) {
-    hideTileView();
-    state.tileChunkCache.clear();
-  }
+  // Close tile view on first pan (the chunk cache is cleared when the new region lands)
+  if (state.currentTileData) hideTileView();
 
   // Compute new target position
   const panStep = REGIONAL_SIZE / CELLS_PER_PLANETARY;
@@ -555,9 +544,11 @@ function handleRegionalPan(key) {
 }
 
 function updateRegionLabel(cx, cy) {
-  const band = getLatitudeBand(Math.round(cy));
-  const plateCell = getPlanetaryCell(Math.round(cx), Math.round(cy));
-  regionLabel.textContent = `REGION: (${Math.round(cx)}, ${Math.round(cy)}) — ${band}, ${plateCell.plateType}`;
+  // Label with the planetary cell that CONTAINS the (fractional) centre
+  const cellX = Math.floor(cx), cellY = Math.floor(cy);
+  const band = getLatitudeBand(cellY);
+  const plateCell = getPlanetaryCell(cellX, cellY);
+  regionLabel.textContent = `REGION: (${cellX}, ${cellY}) — ${band}, ${plateCell.plateType}`;
 }
 
 function startRegionGeneration(cx, cy) {
@@ -567,6 +558,7 @@ function startRegionGeneration(cx, cy) {
   const cached = getCachedRegion(cx, cy);
   if (cached) {
     state.regionalCells = cached;
+    state.tileChunkCache.clear();
     renderRegionalMap(regionalOverlaySelect.value);
     statusText.textContent = 'Regional loaded from cache';
     _regionIsGenerating = false;
@@ -582,6 +574,7 @@ function startRegionGeneration(cx, cy) {
     const t0 = performance.now();
     generateRegionalDetail(cx, cy);
     const t1 = performance.now();
+    state.tileChunkCache.clear();
     cacheRegion(cx, cy, state.regionalCells);
     const r0 = performance.now(); // Session 28: regional render timing
     renderRegionalMap(regionalOverlaySelect.value);
@@ -604,61 +597,7 @@ function checkRegionPendingTarget(completedCx, completedCy) {
     startRegionGeneration(_regionPendingTarget.cx, _regionPendingTarget.cy);
   } else {
     _regionPendingTarget = null;
-    // Generation complete and up to date — precompute neighbors
-    precomputeNeighbors(completedCx, completedCy);
   }
-}
-
-// ── Background Precomputation of Adjacent Regions ──
-function cancelPrecomputation() {
-  if (_precomputeTimer !== null) {
-    clearTimeout(_precomputeTimer);
-    _precomputeTimer = null;
-  }
-}
-
-function precomputeNeighbors(cx, cy) {
-  cancelPrecomputation();
-
-  const panStep = REGIONAL_SIZE / CELLS_PER_PLANETARY;
-  const neighbors = [
-    [((cx + panStep) % W + W) % W, cy],                           // right
-    [((cx - panStep) % W + W) % W, cy],                           // left
-    [cx, Math.max(0, Math.min(H - 1, cy + panStep))],             // down
-    [cx, Math.max(0, Math.min(H - 1, cy - panStep))],             // up
-  ];
-  let i = 0;
-
-  function next() {
-    _precomputeTimer = null;
-    if (i >= neighbors.length) return;
-    // Abort if user started navigating or closed the view
-    if (_regionIsGenerating || !state.selectedRegion) return;
-
-    const [nx, ny] = neighbors[i++];
-
-    // Skip if already cached
-    if (getCachedRegion(nx, ny)) {
-      _precomputeTimer = setTimeout(next, 0);
-      return;
-    }
-
-    // Save current state
-    const savedCells = state.regionalCells;
-
-    // Generate the neighbor (this blocks main thread but happens during idle)
-    generateRegionalDetail(nx, ny);
-    cacheRegion(nx, ny, state.regionalCells);
-
-    // Restore current view's state
-    state.regionalCells = savedCells;
-
-    // Schedule next neighbor
-    _precomputeTimer = setTimeout(next, 0);
-  }
-
-  // Start after a short delay so the current render completes first
-  _precomputeTimer = setTimeout(next, 16);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -704,19 +643,11 @@ export function initUI(runGeneration) {
     hotspotCountRange:  { label: 'Hotspot range',        min: 1,     max: 10,    step: 1,     group: 'Hotspots' },
     hotspotIntensityMin:{ label: 'Intensity min',        min: 0.1,   max: 0.9,   step: 0.1,   group: 'Hotspots' },
     hotspotIntensityMax:{ label: 'Intensity max',        min: 0.2,   max: 1.0,   step: 0.1,   group: 'Hotspots' },
-    subPeakMin:         { label: 'Sub-peaks min',        min: 1,     max: 6,     step: 1,     group: 'Hotspots' },
-    subPeakMax:         { label: 'Sub-peaks max',        min: 1,     max: 8,     step: 1,     group: 'Hotspots' },
-    subPeakSpread:      { label: 'Sub-peak spread (km)', min: 20,    max: 200,   step: 10,    group: 'Hotspots' },
     erosionPasses:      { label: 'Erosion passes',       min: 0,     max: 8,     step: 1,     group: 'Erosion' },
     erosionRate:        { label: 'Erosion rate',          min: 0.04,  max: 0.40,  step: 0.02,  group: 'Erosion' },
     blendWidth:         { label: 'Blend width',           min: 2,     max: 15,    step: 1,     group: 'Blend' },
     coastAmplitude:     { label: 'Coast amplitude',      min: 0.02,  max: 0.20,  step: 0.01,  group: 'Regional' },
-    coastWidth:         { label: 'Coast width',           min: 0.03,  max: 0.15,  step: 0.01,  group: 'Regional' },
     mountainDetail:     { label: 'Mountain detail',       min: 0.01,  max: 0.12,  step: 0.01,  group: 'Regional' },
-    shapeNoiseAmp:      { label: 'Shape noise',           min: 0.00,  max: 0.15,  step: 0.01,  group: 'Regional' },
-    drainageDepth:      { label: 'Drainage depth',        min: 0.000, max: 0.030, step: 0.002, group: 'Regional' },
-    drainagePathsMin:   { label: 'Drain paths min',      min: 2,     max: 12,    step: 1,     group: 'Regional' },
-    drainagePathsMax:   { label: 'Drain paths max',      min: 4,     max: 20,    step: 1,     group: 'Regional' },
     windBlockingStrength: { label: 'Blocking strength',  min: 1.0,   max: 20.0,  step: 0.5,   group: 'Wind' },
     windDeflectionFactor: { label: 'Deflection factor',  min: 0.1,   max: 1.0,   step: 0.05,  group: 'Wind' },
     windDeflectionPasses: { label: 'Deflection passes',  min: 1,     max: 6,     step: 1,     group: 'Wind' },
@@ -807,8 +738,10 @@ export function initUI(runGeneration) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = W / rect.width;
     const scaleY = H / rect.height;
-    const x = Math.floor((e.clientX - rect.left) * scaleX);
-    const y = Math.floor((e.clientY - rect.top) * scaleY);
+    // Fractional planetary coordinate: the regional window is centred exactly where
+    // the user clicked, not on the corner of the containing cell.
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     if (x >= 0 && x < W && y >= 0 && y < H) {
       lastRegionalCoord = null;
       lastTileCoord = null;

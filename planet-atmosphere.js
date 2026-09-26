@@ -5,6 +5,13 @@
 import { state } from './main.js';
 import { W, H, TOTAL, clamp, wrapX, smoothstep } from './core-math.js';
 
+// Neighbour offset tables — module-level so the inner loops don't allocate
+// ~14M throw-away arrays per generation (they were declared per cell per pass).
+const dx4 = [1, -1, 0, 0];
+const dy4 = [0, 0, -1, 1];
+const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
+const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
+
 // ── Step 4: Hydrological System ──
 async function step4_computeAtmosphere(seed, rng) {
   const statusEl = document.getElementById('statusText');
@@ -155,9 +162,6 @@ async function step4_computeAtmosphere(seed, rng) {
         const newV = c.currentU * sinA + c.currentV * cosA;
         c.currentU = newU;
         c.currentV = newV;
-
-        const dx4 = [1, -1, 0, 0];
-        const dy4 = [0, 0, -1, 1];
         for (let d = 0; d < 4; d++) {
           const nx = wrapX(x + dx4[d]);
           const ny = y + dy4[d];
@@ -174,9 +178,6 @@ async function step4_computeAtmosphere(seed, rng) {
             }
           }
         }
-
-        const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-        const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
         let totalInflowU = 0, totalInflowV = 0;
         for (let d = 0; d < 8; d++) {
           const nx = wrapX(x + dx8[d]);
@@ -261,8 +262,6 @@ async function step4_computeAtmosphere(seed, rng) {
       if (c.isLand) continue;
 
       const lat = (y / H) * 180 - 90;
-      const dx4 = [1, -1, 0, 0];
-      const dy4 = [0, 0, -1, 1];
       let isCoastal = false;
       for (let d = 0; d < 4; d++) {
         const nx = wrapX(x + dx4[d]);
@@ -320,8 +319,6 @@ async function step4_computeAtmosphere(seed, rng) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-        const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
         let incoming = 0;
 
         for (let d = 0; d < 8; d++) {
@@ -347,8 +344,6 @@ async function step4_computeAtmosphere(seed, rng) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
         const c = state.cells[ci];
-        const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-        const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
         let totalOut = 0;
         for (let d = 0; d < 8; d++) {
           const nx = wrapX(x + dx8[d]);
@@ -505,9 +500,6 @@ async function step4_computeAtmosphere(seed, rng) {
   for (let i = 0; i < TOTAL; i++) {
     flowAccum[i] = state.cells[i].isLand ? state.cells[i].precipitation : 0;
   }
-
-  const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-  const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
   for (const ci of landIndices) {
     const cx = ci % W;
     const cy = (ci / W) | 0;

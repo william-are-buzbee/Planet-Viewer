@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════════
-// ── state.planet-render.js — Planetary rendering (flat, globe, Mollweide) ──
+// ── planet-render.js — Planetary rendering (flat, globe, Mollweide) ──
 // ══════════════════════════════════════════════════════════════════
 
 import { state } from './main.js';
@@ -93,7 +93,7 @@ export const overlayFunctions = {
     if (e < 0.60)  return { r: 180, g: 160, b: 130 };
     return { r: 200, g: 185, b: 160 };
   },
-  'state.plates': function(cell) {
+  'plates': function(cell) {
     if (cell.boundaryDistance === 0 && cell.boundaryType !== null) return { r: 240, g: 240, b: 240 };
     const hue = (cell.plateId / state.plates.length) * 360;
     const sat = cell.plateType === 'continental' ? 0.4 : 0.25;
@@ -599,9 +599,7 @@ function mollweidePixelToCell(px, py) {
 
   if (Math.abs(cosTheta) < 1e-10) {
     const lat = sinTheta > 0 ? Math.PI / 2 : -Math.PI / 2;
-    const cellX = Math.floor(W / 2);
-    const cellY = Math.floor(Math.max(0, Math.min(H - 1, (lat + Math.PI / 2) / Math.PI * H)));
-    return { x: cellX, y: cellY };
+    return { x: W / 2, y: Math.max(0, Math.min(H - 0.001, (lat + Math.PI / 2) / Math.PI * H)) };
   }
 
   const lon = (mx * Math.PI) / (2 * Math.SQRT2 * cosTheta);
@@ -610,8 +608,9 @@ function mollweidePixelToCell(px, py) {
   const sinLat = clamp((2 * theta + Math.sin(2 * theta)) / Math.PI, -1, 1);
   const lat = Math.asin(sinLat);
 
-  const cellX = Math.floor(((lon + Math.PI) / (2 * Math.PI)) * W) % W;
-  const cellY = Math.floor(Math.max(0, Math.min(H - 1, ((lat + Math.PI / 2) / Math.PI) * H)));
+  // Fractional planetary coordinates (callers floor when they need the cell)
+  const cellX = (((lon + Math.PI) / (2 * Math.PI)) * W) % W;
+  const cellY = Math.max(0, Math.min(H - 0.001, ((lat + Math.PI / 2) / Math.PI) * H));
 
   return { x: cellX, y: cellY };
 }
@@ -838,8 +837,9 @@ function globePixelToCell(px, py) {
   const lat = Math.asin(Math.max(-1, Math.min(1, -y3d)));
   const lon = Math.atan2(x3d, z3d2);
 
-  const cellX = Math.floor(((lon / Math.PI + 1) / 2 * W) % W);
-  const cellY = Math.floor(Math.max(0, Math.min(H - 1, (-lat / (Math.PI / 2) + 1) / 2 * H)));
+  // Fractional planetary coordinates (callers floor when they need the cell)
+  const cellX = ((lon / Math.PI + 1) / 2 * W) % W;
+  const cellY = Math.max(0, Math.min(H - 0.001, (-lat / (Math.PI / 2) + 1) / 2 * H));
 
   return { x: cellX, y: cellY };
 }
