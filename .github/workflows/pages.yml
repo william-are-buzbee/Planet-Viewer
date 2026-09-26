@@ -1,0 +1,38 @@
+# pages.yml — publishes the site as it is (no build) to the gh-pages branch; .github/publish.sh does the writing.
+# main → the live site at the site's root and a kept copy at v/<version>/; a pull request → preview/<number>/, removed when it closes.
+# Pages serves the gh-pages branch (Settings → Pages → Deploy from a branch).
+name: pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - if: github.event.action != 'closed'
+        run: |
+          mkdir -p _site
+          rsync -a --exclude .git --exclude .github --exclude _site ./ _site/
+      - if: github.event_name != 'pull_request'
+        run: bash .github/publish.sh main
+      - if: github.event_name == 'pull_request' && github.event.action != 'closed'
+        run: bash .github/publish.sh pr ${{ github.event.number }}
+      - if: github.event_name == 'pull_request' && github.event.action == 'closed'
+        run: bash .github/publish.sh close ${{ github.event.number }}
+      - if: github.event_name == 'pull_request' && github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner,repo}=context.repo;
+            const url=`https://${owner.toLowerCase()}.github.io/${repo}/preview/${context.issue.number}/`;
+            await github.rest.issues.createComment({owner,repo,issue_number:context.issue.number,body:`preview: ${url}\n\n(updated on every push to this pull request; removed when it closes. The first deploy takes a minute or two after this job.)`});
