@@ -14,6 +14,7 @@ import {
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
 import { REGIONAL_SIZE } from './regional-gen.js';
 import { TILES_PER_REGIONAL_CELL } from './regional-constants.js';
+import { ZONE_NAMES } from './regional-grid.js';
 import { renderRegionalMap, renderTileDetail } from './regional-render.js';
 
 // One chunk covers exactly one regional cell (≈152 m) → ≈1.19 m per tile.
@@ -100,41 +101,38 @@ const tileZoneParams = {
 
 // ── T1: Sample regional context (3×3 bilinear interpolation) ──
 function sampleRegionalContext(rx, ry) {
-  const centre = state.regionalCells[rx][ry];
+  const rg = state.regionalCells;          // struct-of-arrays regional grid
+  const ci = rg.idx(rx, ry);
 
-  // Clamped accessor over the 3×3 regional neighborhood
-  function regGet(gx, gy, fn) {
-    const cx = clamp(rx + gx, 0, REGIONAL_SIZE - 1);
-    const cy = clamp(ry + gy, 0, REGIONAL_SIZE - 1);
-    return fn(state.regionalCells[cx][cy]);
-  }
-
-  // Precompute a 3×3 grid (indexed [gx+1][gy+1]) for one property
-  function grid(fn) {
+  // Precompute a 3×3 grid (indexed [gx+1][gy+1]) of one field, clamped at the edges
+  function grid(arr) {
     const g = [[0,0,0],[0,0,0],[0,0,0]];
     for (let gx = -1; gx <= 1; gx++)
-      for (let gy = -1; gy <= 1; gy++)
-        g[gx + 1][gy + 1] = regGet(gx, gy, fn);
+      for (let gy = -1; gy <= 1; gy++) {
+        const cx = clamp(rx + gx, 0, REGIONAL_SIZE - 1);
+        const cy = clamp(ry + gy, 0, REGIONAL_SIZE - 1);
+        g[gx + 1][gy + 1] = arr[rg.idx(cx, cy)];
+      }
     return g;
   }
 
-  const gElev   = grid(c => (c.baseElevation !== undefined ? c.baseElevation : c.elevation));
-  const gPrecip = grid(c => c.precipitation);
-  const gGW     = grid(c => c.groundwater);
-  const gWA     = grid(c => c.waterAvailability);
-  const gTemp   = grid(c => c.temperature);
-  const gGrain  = grid(c => (c.grainSize !== undefined ? c.grainSize : (c.baseGrainSize || 0.3)));
-  const gFe     = grid(c => c.minerals.iron);
-  const gCu     = grid(c => c.minerals.copper);
-  const gMn     = grid(c => c.minerals.manganese);
+  const gElev   = grid(rg.elevation);
+  const gPrecip = grid(rg.precipitation);
+  const gGW     = grid(rg.groundwater);
+  const gWA     = grid(rg.waterAvailability);
+  const gTemp   = grid(rg.temperature);
+  const gGrain  = grid(rg.grainSize);
+  const gFe     = grid(rg.iron);
+  const gCu     = grid(rg.copper);
+  const gMn     = grid(rg.manganese);
   // Inherit the region's physical / flora state so the tile matches its parent.
-  const gSat    = grid(c => c.saturation || 0);
-  const gWTD    = grid(c => (c.waterTableDepth !== undefined ? c.waterTableDepth : 0));
-  const gGC     = grid(c => c.groundCover || 0);
-  const gCanopy = grid(c => c.canopy || 0);
-  const gChemo  = grid(c => c.chemoCrust || 0);
-  const gOrg    = grid(c => c.organicContent || 0);
-  const gDens   = grid(c => c.floraDensity || 0);
+  const gSat    = grid(rg.saturation);
+  const gWTD    = grid(rg.waterTableDepth);
+  const gGC     = grid(rg.groundCover);
+  const gCanopy = grid(rg.canopy);
+  const gChemo  = grid(rg.chemoCrust);
+  const gOrg    = grid(rg.organicContent);
+  const gDens   = grid(rg.floraDensity);
 
   const elevation        = new Float32Array(CHUNK_TOTAL);
   const precipitation    = new Float32Array(CHUNK_TOTAL);
@@ -192,22 +190,22 @@ function sampleRegionalContext(rx, ry) {
     }
   }
 
-  const _ftInt = { barren: 0, photosynthetic: 1, chemotrophic: 2, mixotrophic: 3, none: 0, frozen: 0 };
+  const ft = rg.floraType[ci];
   return {
     rx, ry,
-    zone: centre.zone,
-    slopeDirection: centre.slopeDir,
-    slopeMagnitude: centre.slopeMag,
+    zone: ZONE_NAMES[rg.zone[ci]],
+    slopeDirection: rg.slopeDir[ci],
+    slopeMagnitude: rg.slopeMag[ci],
     // Global tile coordinates (regional cell's world coordinate × tiles per cell), so
     // tile noise is unique per region and continuous across regional-cell edges.
-    worldX: centre.worldX * CHUNK_W,
-    worldY: centre.worldY * CHUNK_H,
+    worldX: rg.wx(ci) * CHUNK_W,
+    worldY: rg.wy(ci) * CHUNK_H,
     seed: 0,
     elevation, precipitation, groundwater, waterAvailability, temperature,
     grainSizeRegional, iron, copper, manganese,
     // Inherited region physical / flora state (tile baseline)
     satRegional, wtdRegional, gcRegional, canopyRegional, chemoRegional, organicRegional, densRegional,
-    floraTypeInt: _ftInt[centre.floraType] || 0,
+    floraTypeInt: ft <= 3 ? ft : 0,   // regional 'none' / 'frozen' → barren for the tile
   };
 }
 
@@ -771,7 +769,7 @@ function placeTreeCover(context, tileElevation, waterBodies, seed) {
 
 // ── T7: Tie it together ──
 function generateTileDetail(rx, ry) {
-  if (!state.regionalCells || !state.regionalCells[rx] || !state.regionalCells[rx][ry]) return;
+  if (!state.regionalCells || !state.regionalCells.inBounds(rx, ry)) return;
 
   const seed = state.seed | 0;
 
@@ -939,8 +937,8 @@ function printTileDiagnostic(tiles) {
 }
 
 function openTileView(rx, ry) {
-  if (!state.regionalCells || !state.regionalCells[rx] || !state.regionalCells[rx][ry]) return;
-  const rc = state.regionalCells[rx][ry];
+  if (!state.regionalCells || !state.regionalCells.inBounds(rx, ry)) return;
+  const rc = state.regionalCells.cell(rx, ry);
   const container = document.getElementById('tileDetailContainer');
   container.style.display = 'block';
   document.getElementById('tileDetailTitle').textContent =

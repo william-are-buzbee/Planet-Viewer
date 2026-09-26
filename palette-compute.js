@@ -4,6 +4,7 @@
 
 import { clamp } from './core-math.js';
 import { intToTerrainType, intToCoverType } from './terrain-derive.js';
+import { FLORA_NAMES } from './regional-grid.js';
 
 const MAT = {
   photoLiving:    { r: 165, g: 28, b: 28 },
@@ -592,26 +593,25 @@ function tilePhysical(t, i) {
   };
 }
 
-// Regional cell: object with named string/scalar properties
-function regionalPhysical(cell) {
-  const m = cell.minerals || {};
+// Regional grid (struct-of-arrays, regional-grid.js) at index i
+function regionalPhysical(g, i) {
   return {
-    terrainType:    cell.terrainType,
-    coverType:      cell.coverType,
-    iron:           m.iron || 0,
-    copper:         m.copper || 0,
-    manganese:      m.manganese || 0,
-    grainSize:      cell.grainSize || 0.3,
-    saturation:     cell.saturation || 0,
-    organicContent: cell.organicContent || 0,
-    groundCover:    cell.groundCover || 0,
-    canopyDensity:  cell.canopy || 0,
-    chemoCrust:     cell.chemoCrust || 0,
-    waterDepth:     cell.waterDepth || 0,
-    floraType:      cell.floraType || 'barren',
-    wetness:        cell.wetness || 0,        // 0 (dry) to 1 (flooded)
-    pelaRaft:       cell.pelaRaft || 0,       // 0 to ~0.75 (pela raft coverage on water)
-    kolmRelict:     cell.kolmRelict || 0,     // 0 to ~0.6 (dead stele density)
+    terrainType:    intToTerrainType(g.terrainType[i]),
+    coverType:      intToCoverType(g.coverType[i]),
+    iron:           g.iron[i],
+    copper:         g.copper[i],
+    manganese:      g.manganese[i],
+    grainSize:      g.grainSize[i] || 0.3,
+    saturation:     g.saturation[i],
+    organicContent: g.organicContent[i],
+    groundCover:    g.groundCover[i],
+    canopyDensity:  g.canopy[i],
+    chemoCrust:     g.chemoCrust[i],
+    waterDepth:     g.waterDepth[i],
+    floraType:      FLORA_NAMES[g.floraType[i]] || 'barren',
+    wetness:        g.wetness[i],        // 0 (dry) to 1 (flooded)
+    pelaRaft:       g.pelaRaft[i],       // 0 to ~0.75 (pela raft coverage on water)
+    kolmRelict:     g.kolmRelict[i],     // 0 to ~0.6 (dead stele density)
   };
 }
 

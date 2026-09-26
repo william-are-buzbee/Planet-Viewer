@@ -115,20 +115,21 @@ log('RELIEF PER LAYER:', JSON.stringify(await page.evaluate(async () => {
   state.selectedRegion = { cx: px, cy: py };
   generateRegionalDetail(px, py);
   let mn = 1e9, mx = -1e9, bMn = 1e9, bMx = -1e9;
+  const rg = state.regionalCells;
   for (let rx = 0; rx < 512; rx += 4) for (let ry = 0; ry < 512; ry += 4) {
-    const c = state.regionalCells[rx][ry];
-    mn = Math.min(mn, c.elevation); mx = Math.max(mx, c.elevation);
-    const b = bilinearInterpolate(c.worldX / 512, c.worldY / 512, q => q.elevation);
+    const i = rg.idx(rx, ry), e = rg.elevation[i];
+    mn = Math.min(mn, e); mx = Math.max(mx, e);
+    const b = bilinearInterpolate(rg.wx(i) / 512, rg.wy(i) / 512, q => q.elevation);
     bMn = Math.min(bMn, b); bMx = Math.max(bMx, b);
   }
   let rx = -1, ry = -1;
   for (let r = 0; r < 200 && rx < 0; r++) for (let a = 0; a < 8; a++) {
     const x = 256 + Math.round(r * Math.cos(a)), y = 256 + Math.round(r * Math.sin(a));
-    const c = state.regionalCells[x] && state.regionalCells[x][y];
+    const c = rg.cell(x, y);
     if (c && c.isLand && (c.zone === 'lowland' || c.zone === 'mid_slope')) { rx = x; ry = y; break; }
   }
   const t0 = performance.now(); generateTileDetail(rx, ry); const tileMs = Math.round(performance.now() - t0);
-  const t = state.currentTileData.tiles, rc = state.regionalCells[rx][ry];
+  const t = state.currentTileData.tiles, rc = rg.cell(rx, ry);
   let tMn = 1e9, tMx = -1e9, water = 0, so3 = 0, trees = 0;
   for (let i = 0; i < t.elevation.length; i++) { tMn = Math.min(tMn, t.elevation[i]); tMx = Math.max(tMx, t.elevation[i]); if (t.hasWater[i]) water++; if (t.streamOrder[i] >= 3) so3++; if (t.canopy[i] >= 0.7) trees++; }
   return {
@@ -144,7 +145,7 @@ await page.mouse.click(rect.left + (rg.px + 0.5) / 512 * rect.width, rect.top + 
 await waitStatus('Regional');
 log('CLICK OFFSET:', JSON.stringify(await page.evaluate(async () => {
   const { state } = await import('/main.js');
-  const c = state.regionalCells[256][256];
+  const c = state.regionalCells.cell(256, 256);
   return { selectedRegion: state.selectedRegion, regionalCentreAtPlanetary: { px: c.worldX / 512, py: c.worldY / 512 }, note: 'drawn cell centre is (sel.cx+0.5, sel.cy+0.5)' };
 })));
 

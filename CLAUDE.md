@@ -5,7 +5,7 @@ Read this first. If the repo has an audit or design doc (a Fable audit was writt
 ## What this is
 
 A procedural planet generator in the browser: plate tectonics and elevation, then atmosphere, currents and hydrology, then a
-512×512 regional window (≈78 km per planetary cell) with drainage, substrate and flora, then tiles. Plain ES modules, no
+512×512 regional window (≈78 km per planetary cell, typed arrays in `regional-grid.js`) with drainage, substrate and flora, then tiles. Plain ES modules, no
 framework, no dependencies, no build step. `index.html` loads `main.js` as a module; `state.js` holds the shared `state`
 that every other file imports (no imports of its own, no DOM), `dom.js` is the only DOM touch the simulation modules make.
 Units: the planetary and hi-res grids are in *planet units* (1.0 = 10 km, tuned, leave alone); the regional and tile grids are
@@ -26,6 +26,7 @@ tiles of ≈1.19 m covering one regional cell. The world is an archipelago on pu
 | palette-compute.js | the three-layer colour pipeline |
 | units.js | elevation units: `ELEV_UNIT_M`, `puToM`, the shelf / coastal / deep-water thresholds in metres |
 | regional-constants.js | the regional window's shared constants, tiles per regional cell, tile size |
+| regional-grid.js | the regional window as typed arrays (struct-of-arrays, row-major), enum tables, `cell(rx, ry)` |
 | regional-gen.js | regional detail generation |
 | regional-drainage.js | D8 flow accumulation, stream order |
 | regional-substrate.js | grain size, saturation, water table depth |

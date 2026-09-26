@@ -3,148 +3,101 @@
 // ══════════════════════════════════════════════════════════════════
 
 import { clamp, smoothstep } from './core-math.js';
+import { FT_BARREN, FT_PHOTO, FT_CHEMO, FT_MIXO, FT_NONE, FT_FROZEN } from './regional-grid.js';
+
+function clearFlora(g, i, type) {
+  g.floraType[i] = type;
+  g.floraDensity[i] = 0;
+  g.canopy[i] = 0;
+  g.groundCover[i] = 0;
+  g.chemoCrust[i] = 0;
+  g.organicContent[i] = 0;
+  g.pelaConf[i] = 0;
+  g.kolmConf[i] = 0;
+}
 
 // ── Refine flora from the (possibly drainage-modified) state ──
 //    Ground cover, canopy, chemo crust and organic content are recomputed with
 //    the SAME formulas the high-res grid used (stepHR6), so a ridge cell whose
 //    saturation/grain were left at the high-res base reproduces the high-res
 //    flora exactly. Channel cells differ because their inputs changed. Flora
-//    *type* (photo/chemo/mixo/barren) is inherited from the high-res grid.
-function refineRegionalFloraFromHiRes(cell) {
-  if (!cell.isLand) {
-    cell.floraType = 'none'; cell.floraDensity = 0;
-    cell.canopy = 0; cell.groundCover = 0;
-    cell.chemoCrust = 0; cell.organicContent = 0;
-    return;
+//    TYPE is inherited from the hi-res grid (sampled in regional Pass 1c with
+//    ocean corners masked): re-deriving it here disagreed with the hi-res
+//    pipeline in transition zones because the two sampled minerals differently.
+function refineRegionalFloraFromHiRes(g, i) {
+  if (!g.isLand[i])     { clearFlora(g, i, FT_NONE);   return; }
+  if (g.isFreezing[i])  { clearFlora(g, i, FT_FROZEN); return; }
+
+  const ft = g.hrFloraType[i];
+  g.floraType[i] = ft;
+
+  // ── Fitness confidence: how well the local (regional) physics supports the
+  //    inherited type. Same fitness formulas as the planetary / hi-res steps.
+  //    pela (ground cover) is hardier than kolm (canopy), so they taper at
+  //    different rates near type boundaries.
+  let pelaConf = 0, kolmConf = 0;
+  if (ft === FT_PHOTO || ft === FT_CHEMO || ft === FT_MIXO) {
+    const waterMetric = Math.max(g.saturation[i], g.waterAvailability[i]);
+    const mineralTotal = g.mineralTotal[i];
+    const volc = g.volcanism[i];
+    const photoFit = waterMetric * 0.8;
+    const chemoFit = mineralTotal * Math.max(waterMetric, volc * 1.5) * 1.2;
+    const mixoFit  = (0.6 + 0.5 * mineralTotal) * waterMetric;
+    const barrenThreshold = 0.02;
+
+    let assigned, altA, altB;
+    if (ft === FT_PHOTO)      { assigned = photoFit; altA = chemoFit; altB = mixoFit; }
+    else if (ft === FT_CHEMO) { assigned = chemoFit; altA = photoFit; altB = mixoFit; }
+    else                      { assigned = mixoFit;  altA = photoFit; altB = chemoFit; }
+
+    const marginOverBarren = assigned - barrenThreshold;
+    const marginOverAlternative = assigned - Math.max(altA, altB, barrenThreshold);
+    const effectiveMargin = Math.min(marginOverBarren, marginOverAlternative);
+    pelaConf = smoothstep(0.0, 0.10, effectiveMargin);
+    kolmConf = smoothstep(0.03, 0.18, effectiveMargin);
   }
-  if (cell.isFreezing) {
-    cell.floraType = 'frozen'; cell.floraDensity = 0;
-    cell.canopy = 0; cell.groundCover = 0;
-    cell.chemoCrust = 0; cell.organicContent = 0;
-    return;
-  }
+  g.pelaConf[i] = pelaConf;
+  g.kolmConf[i] = kolmConf;
 
-  // Flora TYPE is inherited from the hi-res grid (sampled in regional Pass 1c
-  // with ocean corners masked). Re-deriving it here disagreed with the hi-res
-  // pipeline in transition zones because the two sampled minerals differently.
-  cell.floraType = cell._hrFloraType;
+  // Barren cells have no living cover
+  if (ft === FT_BARREN) { clearFlora(g, i, FT_BARREN); return; }
 
-  // ── S24: Fitness-confidence computation ──
-  // Compute how well the local (regional) physics supports the assigned flora type.
-  // Uses the same fitness formulas as the planetary / hi-res flora steps.
-  {
-    const waterMetric = Math.max(cell.saturation, cell.waterAvailability || 0);
-    const _mineralTotal = cell.mineralTotal;
-    const _volc = cell.volcanism || 0;
-
-    const _photoFit = waterMetric * 0.8;
-    const _chemoFit = _mineralTotal * Math.max(waterMetric, _volc * 1.5) * 1.2;
-    const _mixoFit  = (0.6 + 0.5 * _mineralTotal) * waterMetric;
-
-    let floraTypeNum;
-    if (cell.floraType === 'photosynthetic') floraTypeNum = 1;
-    else if (cell.floraType === 'chemotrophic') floraTypeNum = 2;
-    else if (cell.floraType === 'mixotrophic') floraTypeNum = 3;
-    else floraTypeNum = 0;
-
-    let assignedFitness;
-    if (floraTypeNum === 1) assignedFitness = _photoFit;
-    else if (floraTypeNum === 2) assignedFitness = _chemoFit;
-    else if (floraTypeNum === 3) assignedFitness = _mixoFit;
-    else assignedFitness = 0;
-
-    const _barrenThreshold = 0.02;
-
-    if (floraTypeNum === 0) {
-      cell.fitnessConfidence = 1.0;
-      cell.pelaConf = 0;
-      cell.kolmConf = 0;
-    } else {
-      const marginOverBarren = assignedFitness - _barrenThreshold;
-      const allFit = [_photoFit, _chemoFit, _mixoFit];
-      const alternatives = allFit.filter((_, i) => i !== (floraTypeNum - 1));
-      const bestAlternative = Math.max(...alternatives, _barrenThreshold);
-      const marginOverAlternative = assignedFitness - bestAlternative;
-      const effectiveMargin = Math.min(marginOverBarren, marginOverAlternative);
-
-      const marginFull = 0.12;
-      const t = Math.max(0, Math.min(1, effectiveMargin / marginFull));
-      cell.fitnessConfidence = t * t * (3 - 2 * t);
-
-      cell.pelaConf = smoothstep(0.0, 0.10, effectiveMargin);
-      cell.kolmConf = smoothstep(0.03, 0.18, effectiveMargin);
-    }
-  }
-
-  // R3-FIX2: barren gates canopy
-  // Barren cells have no living cover — skip all canopy/groundCover computation
-  if (cell.floraType === 'barren') {
-    cell.groundCover = 0;
-    cell.canopy = 0;
-    cell.chemoCrust = 0;
-    cell.organicContent = 0;
-    cell.floraDensity = 0;
+  if (g.hasWater[i]) {
+    // Water prevents rooted canopy but NOT ground-level biology: shallow water
+    // supports a floating mat, deep water submerges it.
+    g.canopy[i] = 0;
+    const wd = g.waterDepth[i];
+    let gc, cc;
+    if (wd > 0.3)      { gc = 0; cc = 0; }
+    else if (wd > 0.1) { gc = g.hrGroundCover[i] * 0.3; cc = g.hrChemoCrust[i] * 0.2; }
+    else               { gc = g.hrGroundCover[i] * 0.6; cc = g.hrChemoCrust[i] * 0.5; }
+    gc *= pelaConf;
+    cc *= pelaConf;
+    g.groundCover[i] = gc;
+    g.chemoCrust[i] = cc;
+    g.organicContent[i] = gc * 0.5 * 0.7;   // waterlogged: slow decomposition, organic accumulates
+    g.floraDensity[i] = clamp(Math.max(gc, cc), 0, 1);
     return;
   }
 
-  if (cell.hasWater) {
-    // Water prevents rooted canopy but NOT ground-level biology.
-    // Flora type was already re-derived above — water doesn't
-    // change what KIND of organisms live here, just their structure.
-    // Ground cover: shallow water supports floating mat; deep water
-    // submerges it. Canopy: always zero (can't root in standing water).
-    cell.canopy = 0;
-
-    const wd = cell.waterDepth || 0;
-    if (wd > 0.3) {
-        // Deep water: fully submerged, no surface flora
-        cell.groundCover = 0;
-        cell.chemoCrust = 0;
-    } else if (wd > 0.1) {
-        // Moderate water: sparse floating mat
-        cell.groundCover = cell._hrGroundCover * 0.3;
-        cell.chemoCrust = cell._hrChemoCrust * 0.2;
-    } else {
-        // Shallow water or wet surface: substantial floating mat
-        cell.groundCover = cell._hrGroundCover * 0.6;
-        cell.chemoCrust = cell._hrChemoCrust * 0.5;
-    }
-
-    // S24: Apply fitness-confidence modulation to water path
-    cell.groundCover *= cell.pelaConf;
-    cell.chemoCrust *= cell.pelaConf;
-
-    // Organic content: waterlogged decomposition is slow → organic accumulates
-    const prod = cell.groundCover * 0.5;
-    cell.organicContent = prod * 0.7;  // wet = slow decomposition
-
-    cell.floraDensity = clamp(Math.max(cell.groundCover, cell.chemoCrust), 0, 1);
-    return;
-  }
-
-  const sat = cell.saturation;
-  const grain = cell.grainSize;
-  const precip = cell.precipitation;
-  const gw = cell.groundwater;
-  const volc = cell.volcanism || 0;
-  const mineralTotal = cell.mineralTotal;
-  const hasWaterLocal = cell.waterTableDepth < -0.01;
+  const sat = g.saturation[i];
+  const grain = g.grainSize[i];
+  const precip = g.precipitation[i];
+  const gw = g.groundwater[i];
+  const volc = g.volcanism[i];
+  const mineralTotal = g.mineralTotal[i];
+  const hasWaterLocal = g.waterTableDepth[i] < -0.01;
+  const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0);
 
   // Ground cover (mirrors stepHR6) — scaled by water availability
   let gc;
   if (hasWaterLocal) gc = 0.3;
   else if (grain > 0.8) gc = 0.08;
-  else {
-    const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
-    gc = (0.5 + (1.0 - grain) * 0.4) * waterFactor;
-  }
-  cell.groundCover = gc;
+  else gc = (0.5 + (1.0 - grain) * 0.4) * waterFactor;
 
   // Canopy (mirrors stepHR6)
   let cd = 0;
   if (!hasWaterLocal && grain <= 0.7) {
-    const waterFactor = Math.min(1, precip * 2.0 + gw * 1.0); // R1-FIX2: unified waterFactor
-    // R1-FIX1: smooth saturation factor
     const wetPenalty = smoothstep(0.4, 1.0, sat);
     const dryPenalty = 1.0 - smoothstep(0.05, 0.35, sat);
     const satFactor = Math.max(0.25, 1.0 - 0.65 * wetPenalty - 0.55 * dryPenalty);
@@ -152,134 +105,84 @@ function refineRegionalFloraFromHiRes(cell) {
     cd = waterFactor * satFactor * subFactor;
     if (waterFactor > 0.05 && subFactor > 0.1) cd = Math.max(cd, 0.12);
   }
-  cell.canopy = cd;
 
-  // Chemo crust (mirrors stepHR6) — uses unwarped cell.mineralTotal
+  // Chemo crust (mirrors stepHR6)
   let cc = 0;
   if (mineralTotal > 0.4) {
     const cf = mineralTotal * Math.max(sat, volc * 1.5);
     const pf = gc * 0.8;
     if (cf > pf) {
       cc = Math.min(1, (cf - pf) * 2.0);
-      cell.groundCover *= (1 - cc * 0.6);
+      gc *= (1 - cc * 0.6);
     }
   }
-  cell.chemoCrust = cc;
 
-  // S24: Apply fitness-confidence modulation — pela (ground cover) is hardier
-  // than kolm (canopy), so they taper at different rates near boundaries.
-  cell.groundCover *= cell.pelaConf;
-  cell.canopy *= cell.kolmConf;
+  gc *= pelaConf;
+  cd *= kolmConf;
 
-  // Density for the flora overlay, from the refined cover values.
-  cell.floraDensity = clamp(Math.max(cell.canopy, cell.groundCover), 0, 1);
-
-  // Organic content (mirrors stepHR6)
-  const prod = (cell.groundCover + cell.canopy) * 0.5;
-  cell.organicContent = prod * (sat > 0.7 ? 0.7 : 0.3);
+  g.groundCover[i] = gc;
+  g.canopy[i] = cd;
+  g.chemoCrust[i] = cc;
+  g.floraDensity[i] = clamp(Math.max(cd, gc), 0, 1);
+  g.organicContent[i] = (gc + cd) * 0.5 * (sat > 0.7 ? 0.7 : 0.3);
 }
 
-// ── Derive water state from water table depth ──
-// Replaces computeStandingWater. Instead of detecting topographic basins and
-// filling them (which produced concentric ring artifacts), this reads
-// waterTableDepth directly — channels have negative WTD (water table above
-// surface), ridges have positive WTD (water table below surface).
-//
-// Must be called AFTER both substrate refinement (sets WTD) and flora
-// refinement (sets canopy, groundCover) but BEFORE terrain type derivation
-// (reads the flood-modulated canopy to determine coverType).
-function deriveWTDWater(cells, gridW, gridH) {
-  for (let ry = 0; ry < gridH; ry++) {
-    for (let rx = 0; rx < gridW; rx++) {
-      const cell = cells[rx][ry];
+// ── Derive water state from water table depth (metres) ──
+//    Channels have negative WTD (water table above the surface), ridges
+//    positive. Must run AFTER substrate (WTD) and flora (canopy, groundCover)
+//    and BEFORE terrain derivation, which reads the flood-modulated canopy.
+function deriveWTDWater(g) {
+  const N = g.N;
+  for (let i = 0; i < N; i++) {
+    if (!g.isLand[i]) {
+      g.waterDepth[i] = Math.max(0, -g.elevation[i]);
+      g.hasWater[i] = 1;
+      g.pelaRaft[i] = 0;
+      g.kolmRelict[i] = 0;
+      g.wetness[i] = 1.0;
+      g.baseCanopy[i] = g.canopy[i];
+      continue;
+    }
 
-      // ── Ocean cells: keep existing water handling, set consistent fields ──
-      if (!cell.isLand) {
-        cell.waterDepth = Math.max(0, -cell.baseElevation);
-        cell.hasWater = true;
-        cell.pelaRaft = 0;
-        cell.kolmRelict = 0;
-        cell.wetness = 1.0;
-        cell.baseCanopy = cell.canopy || 0;
-        continue;
-      }
+    const wtd = g.waterTableDepth[i];
+    const depth = Math.max(0, -wtd);
+    g.waterDepth[i] = depth;
 
-      // ── Land cells: derive water state from WTD ──
-      const wtd = cell.waterTableDepth;
+    // 0.02 m minimum filters noise-floor artefacts; SHALLOW_WATER_TERRAIN_THRESHOLD
+    // (0.05 m) in deriveTerrainAndCover decides whether it RENDERS as water.
+    g.hasWater[i] = depth > 0.02 ? 1 : 0;
 
-      // 1. Derive water depth directly from WTD
-      cell.waterDepth = Math.max(0, -wtd);
+    // Continuous wetness for the palette: 0 at WTD ≥ 0.04 (dry), 1 at WTD ≤ −0.03
+    g.wetness[i] = 1.0 - smoothstep(-0.03, 0.04, wtd);
 
-      // 2. Standing water flag for terrain derivation
-      //    0.02m minimum filters noise-floor artifacts.
-      //    The existing SHALLOW_WATER_TERRAIN_THRESHOLD (0.05m) in
-      //    deriveTerrainAndCover handles terrain type classification —
-      //    cells with depth 0.02–0.05m keep their ground terrain type.
-      cell.hasWater = cell.waterDepth > 0.02;
+    // Base canopy before flood modulation (for kolm relicts)
+    const baseCanopy = g.canopy[i];
+    g.baseCanopy[i] = baseCanopy;
 
-      // 3. Continuous wetness parameter (blending factor for palette)
-      //    0 at WTD ≥ 0.04 (dry), 1 at WTD ≤ -0.03 (flooded)
-      //    Tightened transition band so more cells show partial wetness.
-      cell.wetness = 1.0 - smoothstep(-0.03, 0.04, wtd);
+    // Flood-kill: living canopy declines from WTD −0.03, gone by −0.12
+    if (wtd < -0.03) g.canopy[i] = baseCanopy * smoothstep(-0.12, -0.03, wtd);
 
-      // 4. Save base canopy BEFORE flood modulation
-      //    Needed for kolm relict calculation
-      cell.baseCanopy = cell.canopy || 0;
+    // Pela raft: floating photosynthetic mat, photo/mixo only. Peak at depth
+    // 0.02–0.06, declining 0.06–0.18, gone by 0.18.
+    const ft = g.floraType[i];
+    if (depth > 0 && (ft === FT_PHOTO || ft === FT_MIXO)) {
+      const onset   = smoothstep(0.0, 0.02, depth);
+      const decline = 1.0 - smoothstep(0.06, 0.18, depth);
+      g.pelaRaft[i] = onset * decline * 0.75 * Math.min(1.0, g.groundCover[i] * 1.5) * g.pelaConf[i];
+    } else {
+      g.pelaRaft[i] = 0;
+    }
 
-      // 5. Flood-kill modulation on living canopy
-      //    Living canopy starts declining at WTD -0.03, reaches zero by -0.12.
-      //    Compressed from original (-0.05 to -0.20) to match achievable WTD range.
-      if (wtd < -0.03) {
-        cell.canopy = (cell.canopy || 0) * smoothstep(-0.12, -0.03, wtd);
-      }
-
-      // 6. Pela raft coverage (floating photosynthetic mat on water surface)
-      //    Only for photosynthetic or mixotrophic flora types.
-      //    Peak at depth 0.02–0.06 (WTD -0.02 to -0.06), declining from
-      //    0.06–0.18 (deeper channels), gone by depth 0.18 (WTD -0.18).
-      //    Compressed from original (onset 0.04, decline 0.10–0.30).
-      const ft = cell.floraType;
-      const isPelaCapable = (ft === 'photosynthetic' || ft === 1 ||
-                             ft === 'mixotrophic'    || ft === 3);
-      if (cell.waterDepth > 0 && isPelaCapable) {
-        const depth = cell.waterDepth;
-        const onset   = smoothstep(0.0, 0.02, depth);
-        const decline = 1.0 - smoothstep(0.06, 0.18, depth);
-        cell.pelaRaft = onset * decline * 0.75 * Math.min(1.0, (cell.groundCover || 0) * 1.5);
-        // S24: Marginal pela produces less floating material
-        cell.pelaRaft *= cell.pelaConf || 1.0;
-      } else {
-        cell.pelaRaft = 0;
-      }
-
-      // 7. Kolm relict density (dead mineral-ceramic steles still standing)
-      //    Relicts start appearing at WTD -0.03 (as living canopy declines),
-      //    full density by WTD -0.08, begin eroding at -0.15, gone by -0.25.
-      //    Compressed from original (-0.05/-0.15 appear, -0.30/-0.50 erode).
-      if (wtd < -0.03) {
-        const appear = 1.0 - smoothstep(-0.08, -0.03, wtd);
-        const erode  = smoothstep(-0.25, -0.15, wtd);
-        cell.kolmRelict = cell.baseCanopy * 0.8 * appear * erode;
-      } else {
-        cell.kolmRelict = 0;
-      }
+    // Kolm relicts: dead steles appear from WTD −0.03, full by −0.08, erode
+    // −0.15 … −0.25.
+    if (wtd < -0.03) {
+      const appear = 1.0 - smoothstep(-0.08, -0.03, wtd);
+      const erode  = smoothstep(-0.25, -0.15, wtd);
+      g.kolmRelict[i] = baseCanopy * 0.8 * appear * erode;
+    } else {
+      g.kolmRelict[i] = 0;
     }
   }
-
-  // ── Diagnostic: WTD tuning verification (remove after confirming) ──
-  let negWTD = 0, nzWetness = 0, nzPelaRaft = 0, nzKolmRelict = 0, minWTD = Infinity;
-  for (let ry = 0; ry < gridH; ry++) {
-    for (let rx = 0; rx < gridW; rx++) {
-      const c = cells[rx][ry];
-      if (!c.isLand) continue;
-      if (c.waterTableDepth < 0) negWTD++;
-      if (c.wetness > 0) nzWetness++;
-      if (c.pelaRaft > 0) nzPelaRaft++;
-      if (c.kolmRelict > 0) nzKolmRelict++;
-      if (c.waterTableDepth < minWTD) minWTD = c.waterTableDepth;
-    }
-  }
-  console.log(`[WTD Diagnostic] Negative WTD cells: ${negWTD} | Non-zero wetness: ${nzWetness} | Non-zero pelaRaft: ${nzPelaRaft} | Non-zero kolmRelict: ${nzKolmRelict} | Min WTD: ${minWTD.toFixed(4)}`);
 }
 
 export { refineRegionalFloraFromHiRes, deriveWTDWater };

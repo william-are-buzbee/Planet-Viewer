@@ -5,10 +5,13 @@
 import { state } from './state.js';
 import {
   W, H, TOTAL, noise2D, clamp,
-  bilinearSampleHR, maxKey
+  bilinearSampleHR
 } from './core-math.js';
-import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD } from './terrain-derive.js';
-import { REGIONAL_SIZE, CELLS_PER_PLANETARY, PLANETARY_CELL_KM, REGIONAL_CELL_KM, HR_FLORA_NAMES } from './regional-constants.js';
+import { deriveTerrainAndCover, SHALLOW_WATER_TERRAIN_THRESHOLD, terrainTypeToInt, coverTypeToInt,
+         TT_DEEP_WATER, TT_WATER, TT_ROCK, CT_NONE, intToTerrainType } from './terrain-derive.js';
+import { REGIONAL_SIZE, CELLS_PER_PLANETARY, PLANETARY_CELL_KM, REGIONAL_CELL_KM } from './regional-constants.js';
+import { RegionalGrid, ZONE_TIDAL, ZONE_COASTAL, ZONE_LOWLAND, ZONE_MID_SLOPE, ZONE_UPPER_SLOPE, ZONE_SUMMIT,
+         ZONE_NAMES, FLORA_NAMES } from './regional-grid.js';
 import { computeRegionalDrainage } from './regional-drainage.js';
 import { ELEV_UNIT_M, SHELF_DEPTH_M, COASTAL_ELEV_M } from './units.js';
 import { refineRegionalSubstrateFromHiRes } from './regional-substrate.js';
@@ -58,13 +61,13 @@ const TIDAL_DEPTH_M = 5;   // water shallower than this is the tidal zone
 
 function classifyZone(elevation, slopeMag, maxLandElev) {
   if (elevation <= 0) {
-    return elevation > -TIDAL_DEPTH_M ? 'tidal' : 'coastal';
+    return elevation > -TIDAL_DEPTH_M ? ZONE_TIDAL : ZONE_COASTAL;
   }
   const en = elevation / maxLandElev;
-  if (en < 0.06) return 'lowland';
-  if (en < 0.35) return 'mid_slope';
-  if (en < 0.65) return 'upper_slope';
-  return 'summit';
+  if (en < 0.06) return ZONE_LOWLAND;
+  if (en < 0.35) return ZONE_MID_SLOPE;
+  if (en < 0.65) return ZONE_UPPER_SLOPE;
+  return ZONE_SUMMIT;
 }
 
 // ── Regional detail generation ──
@@ -87,11 +90,6 @@ function generateRegionalDetail(centerX, centerY) {
   const originWorldX = centerX * CELLS_PER_PLANETARY - REGIONAL_SIZE / 2;
   const originWorldY = centerY * CELLS_PER_PLANETARY - REGIONAL_SIZE / 2;
 
-  state.regionalCells = new Array(REGIONAL_SIZE);
-  for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-    state.regionalCells[rx] = new Array(REGIONAL_SIZE);
-  }
-
   // Pass 1a: read BASE elevation from hi-res grid (no noise yet).
   // Use a padded grid (MARGIN cells on each side) so the local slope and
   // convergence perturbation stabilize before reaching the interior 512×512
@@ -102,7 +100,11 @@ function generateRegionalDetail(centerX, centerY) {
   const S_PAD = S + 2 * MARGIN;  // 520
   const NN_PAD = S_PAD * S_PAD;
   const baseElevGrid = new Float32Array(NN);
-  const elevGrid = new Float32Array(NN);
+  // The regional grid is struct-of-arrays (regional-grid.js); its elevation
+  // array doubles as the working elevation grid for the passes below.
+  const g = new RegionalGrid(S, originWorldX, originWorldY);
+  state.regionalCells = g;
+  const elevGrid = g.elevation;
 
   // Temporary arrays for high-res field samples (needed in Pass 1c)
   const _hx = new Float32Array(NN);
@@ -317,22 +319,22 @@ function generateRegionalDetail(centerX, centerY) {
         let channelAmp;
         switch (zoneLocal) {
           // metres of ridge-to-channel relief (were 0.018 … 0.001 planet units = 180 … 10 m)
-          case 'lowland':     channelAmp = 10; break;
-          case 'coastal':     channelAmp = 6;  break;
-          case 'tidal':       channelAmp = 3;  break;
-          case 'mid_slope':   channelAmp = 8;  break;
-          case 'upper_slope': channelAmp = 4;  break;
-          case 'summit':      channelAmp = 2;  break;
-          default:            channelAmp = 6;  break;
+          case ZONE_LOWLAND:     channelAmp = 10; break;
+          case ZONE_COASTAL:     channelAmp = 6;  break;
+          case ZONE_TIDAL:       channelAmp = 3;  break;
+          case ZONE_MID_SLOPE:   channelAmp = 8;  break;
+          case ZONE_UPPER_SLOPE: channelAmp = 4;  break;
+          case ZONE_SUMMIT:      channelAmp = 2;  break;
+          default:               channelAmp = 6;  break;
         }
 
         channelOffset = channelNoise * channelAmp;
 
         // Reduce isotropic noise on flat terrain so anisotropic channels dominate
-        if (zoneLocal === 'lowland')          detailAmp *= 0.4;
-        else if (zoneLocal === 'coastal')     detailAmp *= 0.5;
-        else if (zoneLocal === 'tidal')       detailAmp *= 0.5;
-        else if (zoneLocal === 'mid_slope')   detailAmp *= 0.7;
+        if (zoneLocal === ZONE_LOWLAND)          detailAmp *= 0.4;
+        else if (zoneLocal === ZONE_COASTAL)     detailAmp *= 0.5;
+        else if (zoneLocal === ZONE_TIDAL)       detailAmp *= 0.5;
+        else if (zoneLocal === ZONE_MID_SLOPE)   detailAmp *= 0.7;
         // upper_slope and summit keep full amplitude
       }
 
@@ -363,9 +365,7 @@ function generateRegionalDetail(centerX, centerY) {
       const hrGrain     = hrd.grainSize[bi00]*bw00 + hrd.grainSize[bi10]*bw10 + hrd.grainSize[bi01]*bw01 + hrd.grainSize[bi11]*bw11;
       const hrSat       = hrd.saturation[bi00]*bw00 + hrd.saturation[bi10]*bw10 + hrd.saturation[bi01]*bw01 + hrd.saturation[bi11]*bw11;
       const hrGCover    = hrd.groundCover[bi00]*bw00 + hrd.groundCover[bi10]*bw10 + hrd.groundCover[bi01]*bw01 + hrd.groundCover[bi11]*bw11;
-      const hrCanopy    = hrd.canopyDensity[bi00]*bw00 + hrd.canopyDensity[bi10]*bw10 + hrd.canopyDensity[bi01]*bw01 + hrd.canopyDensity[bi11]*bw11;
       const hrChemo     = hrd.chemoCrust[bi00]*bw00 + hrd.chemoCrust[bi10]*bw10 + hrd.chemoCrust[bi01]*bw01 + hrd.chemoCrust[bi11]*bw11;
-      const hrOrganic   = hrd.organicContent[bi00]*bw00 + hrd.organicContent[bi10]*bw10 + hrd.organicContent[bi01]*bw01 + hrd.organicContent[bi11]*bw11;
       const hrWTD       = hrd.waterTableDepth[bi00]*bw00 + hrd.waterTableDepth[bi10]*bw10 + hrd.waterTableDepth[bi01]*bw01 + hrd.waterTableDepth[bi11]*bw11;
       const hrPrecip    = hrd.precipitation[bi00]*bw00 + hrd.precipitation[bi10]*bw10 + hrd.precipitation[bi01]*bw01 + hrd.precipitation[bi11]*bw11;
       const hrGW        = hrd.groundwater[bi00]*bw00 + hrd.groundwater[bi10]*bw10 + hrd.groundwater[bi01]*bw01 + hrd.groundwater[bi11]*bw11;
@@ -396,7 +396,7 @@ function generateRegionalDetail(centerX, centerY) {
         const isOcean11 = e11 <= 0;
 
         if (isOcean00 && isOcean10 && isOcean01 && isOcean11) {
-          hrFloraType = 'barren';
+          hrFloraType = 0;   // all-ocean footprint: barren
         } else {
           // Compute bilinear weights, zeroing ocean corners
           let fw00 = isOcean00 ? 0 : bw00;
@@ -419,7 +419,7 @@ function generateRegionalDetail(centerX, centerY) {
           const allAgree = landTypes.length > 0 && landTypes.every(t => t === landTypes[0]);
 
           if (allAgree) {
-            hrFloraType = HR_FLORA_NAMES[landTypes[0]] || 'barren';
+            hrFloraType = landTypes[0];
           } else {
             // Boundary path: accumulate weights per type
             const typeWeights = new Map();
@@ -441,15 +441,14 @@ function generateRegionalDetail(centerX, centerY) {
                 bestType = type;
               }
             }
-            hrFloraType = HR_FLORA_NAMES[bestType] || 'barren';
+            hrFloraType = bestType;
           }
         }
       }
 
       // ── Batched planetary grid sampling: compute corners once ──
-      // Eliminates 7 redundant floor/mod/clamp per cell for the 8 remaining
-      // planetary bilinear calls (waterAvailability, atmosphericMoisture,
-      // temperature, drainage, windSpeed, sst, windU, windV).
+      // Two planetary fields are still sampled here: waterAvailability
+      // (land-masked) and temperature.
       const px0 = Math.floor(px), py0 = Math.floor(py);
       const pfx = px - px0, pfy = py - py0;
       const pwx0 = ((Math.round(px0) % W) + W) % W;
@@ -479,72 +478,52 @@ function generateRegionalDetail(centerX, centerY) {
         else        { lw00 = pw00; lw10 = pw10; lw01 = pw01; lw11 = pw11; }
       }
 
-      const cell = {
-        rx, ry,
-        worldX, worldY,
-        baseElevation: elev,
-        elevation: elev,
-        isLand: elev > 0,
-        // planetary-sampled atmospheric fields (batched inline bilinear)
-        precipitation: hrPrecip,
-        groundwater: hrGW,
-        waterAvailability: pc00.waterAvailability*lw00 + pc10.waterAvailability*lw10 + pc01.waterAvailability*lw01 + pc11.waterAvailability*lw11,
-        atmosphericMoisture: pc00.atmosphericMoisture*pw00 + pc10.atmosphericMoisture*pw10 + pc01.atmosphericMoisture*pw01 + pc11.atmosphericMoisture*pw11,
-        temperature: pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11,
-        drainage: pc00.drainage*lw00 + pc10.drainage*lw10 + pc01.drainage*lw01 + pc11.drainage*lw11,
-        windSpeed: pc00.windSpeed*pw00 + pc10.windSpeed*pw10 + pc01.windSpeed*pw01 + pc11.windSpeed*pw11,
-        sst: pc00.sst*pw00 + pc10.sst*pw10 + pc01.sst*pw01 + pc11.sst*pw11,
-        volcanism: hrVolc,
-        minerals: {
-          iron: hrIron,
-          copper: hrCopper,
-          manganese: hrManganese,
-        },
-        grainSize: hrGrain,
-        baseGrainSize: hrGrain,
-        windU: pc00.windU*pw00 + pc10.windU*pw10 + pc01.windU*pw01 + pc11.windU*pw11,
-        windV: pc00.windV*pw00 + pc10.windV*pw10 + pc01.windV*pw01 + pc11.windV*pw11,
-        currentSpeed: 0,
-        currentU: 0,
-        currentV: 0,
-        // high-res base values retained for the refinement passes
-        _hrGrainSize: hrGrain,
-        _hrSaturation: hrSat,
-        _hrGroundCover: hrGCover,
-        _hrCanopy: hrCanopy,
-        _hrChemoCrust: hrChemo,
-        _hrOrganic: hrOrganic,
-        _hrWaterTableDepth: hrWTD,
-        _hrFloraType: hrFloraType,
-      };
-      cell.mineralTotal = cell.minerals.iron + cell.minerals.copper + cell.minerals.manganese;
-      cell.dominant = maxKey(cell.minerals);
-      // Reclassify land/water from the refined elevation (adds coastline detail)
-      cell.isShallowWater = elev > -SHELF_DEPTH_M && elev <= 0;
-      cell.isDeepWater = elev <= -SHELF_DEPTH_M;
-      cell.isFreezing = cell.temperature < 0.5;
-      state.regionalCells[rx][ry] = cell;
+      const tempC = pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11;
+
+      // Write the cell into the struct-of-arrays grid (elevGrid IS g.elevation)
+      g.isLand[idx]         = elev > 0 ? 1 : 0;
+      g.isShallowWater[idx] = (elev > -SHELF_DEPTH_M && elev <= 0) ? 1 : 0;   // reclassified from the refined elevation
+      g.isDeepWater[idx]    = elev <= -SHELF_DEPTH_M ? 1 : 0;
+      g.isFreezing[idx]     = tempC < 0.5 ? 1 : 0;
+      g.temperature[idx]    = tempC;
+      g.precipitation[idx]  = hrPrecip;
+      g.groundwater[idx]    = hrGW;
+      g.waterAvailability[idx] = pc00.waterAvailability*lw00 + pc10.waterAvailability*lw10 + pc01.waterAvailability*lw01 + pc11.waterAvailability*lw11;
+      g.volcanism[idx]      = hrVolc;
+      g.iron[idx]           = hrIron;
+      g.copper[idx]         = hrCopper;
+      g.manganese[idx]      = hrManganese;
+      g.mineralTotal[idx]   = hrIron + hrCopper + hrManganese;
+      g.grainSize[idx]      = hrGrain;
+      // high-res base values retained for the refinement passes
+      g.hrGrainSize[idx]       = hrGrain;
+      g.hrSaturation[idx]      = hrSat;
+      g.hrGroundCover[idx]     = hrGCover;
+      g.hrChemoCrust[idx]      = hrChemo;
+      g.hrWaterTableDepth[idx] = hrWTD;
+      g.hrFloraType[idx]       = hrFloraType;
     }
   }
 
   const _t3 = performance.now();
   // Pass 2: slopes + zone classification (on the refined elevation grid)
-  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      const cell = state.regionalCells[rx][ry];
-      const xm = Math.max(0, rx - 1), xp = Math.min(REGIONAL_SIZE - 1, rx + 1);
-      const ym = Math.max(0, ry - 1), yp = Math.min(REGIONAL_SIZE - 1, ry + 1);
-      const gx = (elevGrid[ry * REGIONAL_SIZE + xp] - elevGrid[ry * REGIONAL_SIZE + xm]) / 2;
-      const gy = (elevGrid[yp * REGIONAL_SIZE + rx] - elevGrid[ym * REGIONAL_SIZE + rx]) / 2;
-      cell.slopeMag = Math.sqrt(gx * gx + gy * gy);
-      cell.slopeDir = Math.atan2(gy, gx);
-      cell.zone = classifyZone(cell.baseElevation, cell.slopeMag, maxLand);
+  for (let ry = 0; ry < S; ry++) {
+    for (let rx = 0; rx < S; rx++) {
+      const i = ry * S + rx;
+      const xm = Math.max(0, rx - 1), xp = Math.min(S - 1, rx + 1);
+      const ym = Math.max(0, ry - 1), yp = Math.min(S - 1, ry + 1);
+      const gx = (elevGrid[ry * S + xp] - elevGrid[ry * S + xm]) / 2;
+      const gy = (elevGrid[yp * S + rx] - elevGrid[ym * S + rx]) / 2;
+      const slopeMag = Math.sqrt(gx * gx + gy * gy);
+      g.slopeMag[i] = slopeMag;
+      g.slopeDir[i] = Math.atan2(gy, gx);
+      g.zone[i] = classifyZone(elevGrid[i], slopeMag, maxLand);
     }
   }
 
   const _t4 = performance.now();
   // Pass 3: drainage (higher-resolution flow accumulation than the high-res grid)
-  computeRegionalDrainage(elevGrid);
+  computeRegionalDrainage(g);
 
   // R2-FIX2: removed hi-res stream order inheritance (former Pass 3b).
   // The regional D8 flow accumulation (computeRegionalDrainage) already
@@ -557,36 +536,24 @@ function generateRegionalDetail(centerX, centerY) {
   const _t5 = performance.now();
   // Pass 4: refine substrate / saturation / water table from the high-res base.
   //         Ridge cells keep high-res values; channels get wetter and finer.
-  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      refineRegionalSubstrateFromHiRes(state.regionalCells[rx][ry]);
-    }
-  }
+  for (let i = 0; i < NN; i++) refineRegionalSubstrateFromHiRes(g, i);
 
   const _t6 = performance.now();
   // Pass 5a: refine flora from the (possibly drainage-modified) state.
   //          Sets canopy, groundCover — these are the "dry" values before
   //          flood modulation. Must run before deriveWTDWater.
-  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      refineRegionalFloraFromHiRes(state.regionalCells[rx][ry]);
-    }
-  }
+  for (let i = 0; i < NN; i++) refineRegionalFloraFromHiRes(g, i);
 
   const _t7 = performance.now();
   // Pass 5b: derive water state from WTD (replaces computeStandingWater).
   //          Reads WTD (set in Pass 4) and canopy (set in Pass 5a).
   //          Modulates canopy downward for flooded zones.
-  deriveWTDWater(state.regionalCells, REGIONAL_SIZE, REGIONAL_SIZE);
+  deriveWTDWater(g);
 
   const _t8 = performance.now();
   // Pass 5c: derive terrain type through the canonical function.
   //          Reads the flood-modulated canopy to determine coverType.
-  for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-    for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-      deriveRegionalTerrainType(state.regionalCells[rx][ry]);
-    }
-  }
+  for (let i = 0; i < NN; i++) deriveRegionalTerrainType(g, i);
 
   const _t9 = performance.now();
   console.log(`Regional gen breakdown (ms):`,
@@ -601,101 +568,64 @@ function generateRegionalDetail(centerX, centerY) {
     `terrain=${(_t9-_t8).toFixed(1)}`,
     `total=${(_t9-_t0).toFixed(1)}`);
 
-  printRegionalDiagnostic();
+  printRegionalDiagnostic(g);
 }
 
 // ── Regional terrain derivation — thin wrapper over deriveTerrainAndCover ──
-function deriveRegionalTerrainType(cell) {
+function deriveRegionalTerrainType(g, i) {
   // Water / ice handled here (canonical fn is elevation-based; regional keeps
   // its own deep/shallow/standing-water and freezing distinctions).
-  if (!cell.isLand) {
-    cell.terrainType = cell.isDeepWater ? 'deep_water' : 'water';
-    cell.coverType = 'none';
+  if (!g.isLand[i]) {
+    g.terrainType[i] = g.isDeepWater[i] ? TT_DEEP_WATER : TT_WATER;
+    g.coverType[i] = CT_NONE;
     return;
   }
-  if (cell.hasWater && (cell.waterDepth || 0) >= SHALLOW_WATER_TERRAIN_THRESHOLD) {
-    cell.terrainType = 'water';
-    cell.coverType = 'none';
+  if (g.hasWater[i] && g.waterDepth[i] >= SHALLOW_WATER_TERRAIN_THRESHOLD) {
+    g.terrainType[i] = TT_WATER;
+    g.coverType[i] = CT_NONE;
     return;
   }
-  // Shallow water (< threshold) falls through to normal terrain derivation.
-  // The cell still has hasWater=true — it just doesn't RENDER as water terrain.
-  if (cell.isFreezing) {
-    cell.terrainType = 'rock';
-    cell.coverType = 'none';
+  // Shallower standing water falls through to normal terrain derivation: the
+  // cell still has hasWater set, it just doesn't RENDER as water terrain.
+  if (g.isFreezing[i]) {
+    g.terrainType[i] = TT_ROCK;
+    g.coverType[i] = CT_NONE;
     return;
   }
 
-  const isCoastal = cell.elevation > 0 && cell.elevation < COASTAL_ELEV_M;
+  const elev = g.elevation[i];
+  const isCoastal = elev > 0 && elev < COASTAL_ELEV_M;
   const result = deriveTerrainAndCover(
-    cell.elevation,
-    cell.isLand,
-    cell.grainSize,
-    cell.saturation,
-    cell.groundCover,
-    cell.canopy,
-    cell.chemoCrust || 0,
-    cell.floraType,
-    cell.waterTableDepth,
+    elev,
+    true,
+    g.grainSize[i],
+    g.saturation[i],
+    g.groundCover[i],
+    g.canopy[i],
+    g.chemoCrust[i],
+    g.floraType[i],
+    g.waterTableDepth[i],
     isCoastal
   );
-  cell.terrainType = result.terrainType;
-  cell.coverType = result.coverType;
+  g.terrainType[i] = terrainTypeToInt(result.terrainType);
+  g.coverType[i] = coverTypeToInt(result.coverType);
 }
 
-function printRegionalDiagnostic() {
-  if (!state.regionalCells) return;
-  const counts = {};
-  const zoneCounts = {};
-  let land = 0, water = 0;
-  for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-    for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-      const c = state.regionalCells[rx][ry];
-      counts[c.terrainType] = (counts[c.terrainType] || 0) + 1;
-      zoneCounts[c.zone] = (zoneCounts[c.zone] || 0) + 1;
-      if (c.isLand) land++; else water++;
-    }
+function printRegionalDiagnostic(g) {
+  if (!g) return;
+  const terrainCounts = new Uint32Array(16), zoneCounts = new Uint32Array(8), floraCounts = new Uint32Array(8);
+  let land = 0;
+  for (let i = 0; i < g.N; i++) {
+    terrainCounts[g.terrainType[i]]++;
+    zoneCounts[g.zone[i]]++;
+    if (g.isLand[i]) { land++; floraCounts[g.floraType[i]]++; }
   }
-  const total = REGIONAL_SIZE * REGIONAL_SIZE;
-  const fmt = (obj) => Object.keys(obj)
-    .map(k => `${k}=${(obj[k] / total * 100).toFixed(1)}%`)
-    .join('  ');
+  const pct = n => (n / g.N * 100).toFixed(1) + '%';
   console.log('=== REGIONAL DIAGNOSTIC ===');
-  console.log('Land:', land, 'Water:', water);
-  console.log('Terrain types: ' + fmt(counts));
-  console.log('Zones: ' + fmt(zoneCounts));
-
-  // S24: Fitness-confidence diagnostic (remove after verification)
-  const floraCounts = {};
-  let confLt05 = 0, confLt01 = 0;
-  const confByType = {};
-  for (let rx = 0; rx < REGIONAL_SIZE; rx++) {
-    for (let ry = 0; ry < REGIONAL_SIZE; ry++) {
-      const c = state.regionalCells[rx][ry];
-      if (!c.isLand) continue;
-      const ft = c.floraType || 'barren';
-      floraCounts[ft] = (floraCounts[ft] || 0) + 1;
-      const fc = c.fitnessConfidence;
-      if (fc !== undefined) {
-        if (fc < 0.5) confLt05++;
-        if (fc < 0.1) confLt01++;
-        if (!confByType[ft]) confByType[ft] = { min: fc, max: fc, sum: fc, n: 1 };
-        else {
-          const s = confByType[ft];
-          s.min = Math.min(s.min, fc);
-          s.max = Math.max(s.max, fc);
-          s.sum += fc;
-          s.n++;
-        }
-      }
-    }
-  }
-  console.log('Flora types: ' + Object.entries(floraCounts).map(([k,v]) => `${k}=${v}`).join('  '));
-  console.log(`Confidence < 0.5: ${confLt05} | < 0.1: ${confLt01}`);
-  for (const [ft, s] of Object.entries(confByType)) {
-    console.log(`  ${ft}: min=${s.min.toFixed(3)} max=${s.max.toFixed(3)} mean=${(s.sum/s.n).toFixed(3)} (n=${s.n})`);
-  }
-
+  console.log('Land:', land, 'Water:', g.N - land);
+  console.log('Terrain types: ' + Array.from(terrainCounts).map((n, t) => n ? `${intToTerrainType(t)}=${pct(n)}` : '').filter(Boolean).join('  '));
+  console.log('Zones: ' + Array.from(zoneCounts).map((n, z) => n ? `${ZONE_NAMES[z]}=${pct(n)}` : '').filter(Boolean).join('  '));
+  console.log('Flora types (land): ' + Array.from(floraCounts).map((n, f) => n ? `${FLORA_NAMES[f]}=${n}` : '').filter(Boolean).join('  '));
   console.log('=== END REGIONAL DIAGNOSTIC ===');
 }
 
