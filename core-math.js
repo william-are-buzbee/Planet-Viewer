@@ -39,17 +39,6 @@ export function noise2D(x, y, seed) {
   return (nx0 + (nx1 - nx0) * sy) * 2 - 1; // map to -1..1
 }
 
-export function fractalNoise(x, y, seed, octaves, baseScale) {
-  let value = 0, amplitude = 1, frequency = baseScale, totalAmp = 0;
-  for (let i = 0; i < octaves; i++) {
-    value += amplitude * noise2D(x * frequency, y * frequency, seed + i * 1000);
-    totalAmp += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return value / totalAmp;
-}
-
 // ── 3D noise for wrapping x-axis ──
 export function hashInt3D(x, y, z, seed) {
   let h = (seed & 0xffffffff) + (x * 374761393) + (y * 668265263) + (z * 1274126177);
@@ -90,16 +79,6 @@ export function fractalNoise3D(x, y, z, seed, octaves, scale) {
     frequency *= 2;
   }
   return value / totalAmp;
-}
-
-// Map x to a circle in 3D so x=0 and x=W land on the same point,
-// producing seamless wrapping on the x-axis.
-export function wrappedNoise(x, y, seed, octaves, scale) {
-  const theta = (x / W) * Math.PI * 2;
-  const circleScale = W / (Math.PI * 2); // preserve feature size
-  const nx = Math.cos(theta) * circleScale;
-  const nz = Math.sin(theta) * circleScale;
-  return fractalNoise3D(nx, y, nz, seed, octaves, scale);
 }
 
 // ── Precomputed sphere positions for all cells ──
@@ -155,29 +134,7 @@ export function wrappedDistSq(x1, y1, x2, y2) {
   return dx * dx + dy * dy;
 }
 
-export function wrappedDist(x1, y1, x2, y2) {
-  return Math.sqrt(wrappedDistSq(x1, y1, x2, y2));
-}
-
 export function wrapX(x) { return ((x % W) + W) % W; }
-
-// ── Spherical distance (fixes pole pinching) ──
-export function toSphere(cellX, cellY) {
-  const lon = (cellX / W) * Math.PI * 2 - Math.PI;  // -π to π
-  const lat = (cellY / H) * Math.PI - Math.PI / 2;   // -π/2 to π/2 (south to north)
-  return {
-    x: Math.cos(lat) * Math.cos(lon),
-    y: Math.sin(lat),
-    z: Math.cos(lat) * Math.sin(lon)
-  };
-}
-
-export function sphericalDist(x1, y1, x2, y2) {
-  const a = toSphere(x1, y1);
-  const b = toSphere(x2, y2);
-  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-  return Math.sqrt(dx*dx + dy*dy + dz*dz);
-}
 
 // Convert a plate drift (2D angle + speed) to a 3D tangent vector on the sphere
 export function driftTo3D(centerX, centerY, angleDeg, speed) {
@@ -195,8 +152,6 @@ export function driftTo3D(centerX, centerY, angleDeg, speed) {
   };
 }
 
-export function idx(x, y) { return y * W + wrapX(x); }
-
 export function maxKey(obj) {
   let best = null, bestVal = -Infinity;
   for (const k in obj) {
@@ -204,8 +159,6 @@ export function maxKey(obj) {
   }
   return best;
 }
-
-export function toRad(deg) { return deg * Math.PI / 180; }
 
 export function getLatitudeBand(y) {
   if (y < 25 || y >= 230) return 'polar';
@@ -255,9 +208,3 @@ export function bilinearSampleHR(array, fx, fy, hrW, hrH) {
   return vx0 + (vx1 - vx0) * dy;
 }
 
-// ── Nearest-neighbor sample of a high-res typed array (for enum/int fields) ──
-export function nearestSampleHR(array, fx, fy, hrW, hrH) {
-  const nx = ((Math.round(fx) % hrW) + hrW) % hrW;
-  const ny = Math.max(0, Math.min(hrH - 1, Math.round(fy)));
-  return array[ny * hrW + nx];
-}

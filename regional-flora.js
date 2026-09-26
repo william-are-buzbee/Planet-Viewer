@@ -2,7 +2,6 @@
 // ── regional-flora.js — Flora type, ground cover, canopy, WTD water
 // ══════════════════════════════════════════════════════════════════
 
-import { state } from './main.js';
 import { clamp, smoothstep } from './core-math.js';
 
 // ── Refine flora from the (possibly drainage-modified) state ──
@@ -25,31 +24,14 @@ function refineRegionalFloraFromHiRes(cell) {
     return;
   }
 
-  // FIX 1: flora type inheritance — inherit from hi-res grid instead of
-  // re-deriving. Re-derivation disagrees with the hi-res pipeline due to
-  // mineral sampling differences (regional domain-warps the coordinates,
-  // hi-res does not), causing photo/chemo disagreements in transition zones.
-
-  if (state.hiResData) {
-    // R2-FIX1: flora type already determined during Pass 1c via weighted
-    // probabilistic sampling from the four surrounding hi-res cells.
-    // No re-sampling or boundary jitter needed here.
-    cell.floraType = cell._hrFloraType;
-  } else {
-    // LowRes fallback: no hi-res grid available, use fitness competition.
-    // This path is less critical since low-res mode doesn't show the
-    // globe/regional disagreement.
-    computeRegionalFloraCell(cell);
-    // computeRegionalFloraCell sets canopy/groundCover/etc. too — return
-    // early to avoid overwriting those downstream values.
-    return;
-  }
-
-  // ── From here, flora type is already set per cell above ──
+  // Flora TYPE is inherited from the hi-res grid (sampled in regional Pass 1c
+  // with ocean corners masked). Re-deriving it here disagreed with the hi-res
+  // pipeline in transition zones because the two sampled minerals differently.
+  cell.floraType = cell._hrFloraType;
 
   // ── S24: Fitness-confidence computation ──
   // Compute how well the local (regional) physics supports the assigned flora type.
-  // Uses the same fitness formulas as computeRegionalFloraCell (LowRes path).
+  // Uses the same fitness formulas as the planetary / hi-res flora steps.
   {
     const waterMetric = Math.max(cell.saturation, cell.waterAvailability || 0);
     const _mineralTotal = cell.mineralTotal;
@@ -197,119 +179,6 @@ function refineRegionalFloraFromHiRes(cell) {
   cell.organicContent = prod * (sat > 0.7 ? 0.7 : 0.3);
 }
 
-// ── Regional flora ──
-function computeRegionalFloraCell(cell) {
-  if (!cell.isLand) { cell.floraType = 'none'; cell.floraDensity = 0; return; }
-  if (cell.isFreezing) { cell.floraType = 'frozen'; cell.floraDensity = 0; return; }
-  if (cell.hasWater) {
-    // Same graduated response as refineRegionalFloraFromHiRes:
-    // water prevents rooted canopy, but floating mat persists in shallows.
-    cell.canopy = 0;
-    const wd = cell.waterDepth || 0;
-    if (wd > 0.3) {
-        cell.groundCover = 0;
-        cell.chemoCrust = 0;
-        cell.floraDensity = 0;
-    } else if (wd > 0.1) {
-        cell.groundCover = 0.2;
-        cell.chemoCrust = 0;
-        cell.floraDensity = 0.2;
-    } else {
-        cell.groundCover = 0.4;
-        cell.chemoCrust = 0;
-        cell.floraDensity = 0.4;
-    }
-    // Flora type: compute from fitness as normal (don't skip to 'none')
-    const water = Math.max(cell.saturation, cell.waterAvailability);
-    const photoFitness = water * 0.8; // R1-FIX4A: removed elevation penalty, coefficient 0.8 matches planetary/hi-res
-    const chemoFitness = cell.mineralTotal * Math.max(water, (cell.volcanism || 0) * 1.5) * 1.2; // R1-FIX3: volcanism, not groundwater
-    const mixoFitness  = (0.6 + 0.5 * cell.mineralTotal) * water;
-    if (chemoFitness > photoFitness && chemoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
-        cell.floraType = 'chemotrophic';
-    } else if (photoFitness > 0.02) { // R1-FIX4B: barren threshold 0.02
-        cell.floraType = 'photosynthetic';
-    } else {
-        cell.floraType = 'barren';
-    }
-    // S24: Compute and apply fitness-confidence for water path
-    {
-      let ftNum;
-      if (cell.floraType === 'photosynthetic') ftNum = 1;
-      else if (cell.floraType === 'chemotrophic') ftNum = 2;
-      else if (cell.floraType === 'mixotrophic') ftNum = 3;
-      else ftNum = 0;
-      if (ftNum === 0) {
-        cell.fitnessConfidence = 1.0; cell.pelaConf = 0; cell.kolmConf = 0;
-      } else {
-        const aFit = ftNum === 1 ? photoFitness : ftNum === 2 ? chemoFitness : mixoFitness;
-        const alts = [photoFitness, chemoFitness, mixoFitness].filter((_, i) => i !== (ftNum - 1));
-        const bestAlt = Math.max(...alts, 0.02);
-        const em = Math.min(aFit - 0.02, aFit - bestAlt);
-        const tConf = Math.max(0, Math.min(1, em / 0.12));
-        cell.fitnessConfidence = tConf * tConf * (3 - 2 * tConf);
-        cell.pelaConf = smoothstep(0.0, 0.10, em);
-        cell.kolmConf = smoothstep(0.03, 0.18, em);
-      }
-      cell.groundCover *= cell.pelaConf;
-    }
-    return;
-  }
-
-  const water = Math.max(cell.saturation, cell.waterAvailability);
-  const photoFitness = water * 0.8; // R1-FIX4A: removed elevation penalty, coefficient 0.8 matches planetary/hi-res
-  const chemoFitness = cell.mineralTotal * Math.max(water, (cell.volcanism || 0) * 1.5) * 1.2; // R1-FIX3: volcanism, not groundwater
-  const mixoFitness  = (0.6 + 0.5 * cell.mineralTotal) * water;
-  const maxFit = Math.max(photoFitness, chemoFitness, mixoFitness);
-
-  if (maxFit < 0.02) { // R1-FIX4B: barren threshold 0.02
-    cell.floraType = 'barren'; cell.floraDensity = 0;
-    cell.fitnessConfidence = 1.0; cell.pelaConf = 0; cell.kolmConf = 0;
-    return;
-  }
-  if (photoFitness >= chemoFitness && photoFitness >= mixoFitness) {
-    cell.floraType = 'photosynthetic';
-  } else if (chemoFitness >= mixoFitness) {
-    cell.floraType = 'chemotrophic';
-  } else {
-    cell.floraType = 'mixotrophic';
-  }
-  cell.floraDensity = clamp(maxFit, 0, 1);
-
-  // S24: Fitness-confidence computation (fitness values already available)
-  {
-    let ftNum;
-    if (cell.floraType === 'photosynthetic') ftNum = 1;
-    else if (cell.floraType === 'chemotrophic') ftNum = 2;
-    else ftNum = 3;
-    const aFit = ftNum === 1 ? photoFitness : ftNum === 2 ? chemoFitness : mixoFitness;
-    const alts = [photoFitness, chemoFitness, mixoFitness].filter((_, i) => i !== (ftNum - 1));
-    const bestAlt = Math.max(...alts, 0.02);
-    const em = Math.min(aFit - 0.02, aFit - bestAlt);
-    const tConf = Math.max(0, Math.min(1, em / 0.12));
-    cell.fitnessConfidence = tConf * tConf * (3 - 2 * tConf);
-    cell.pelaConf = smoothstep(0.0, 0.10, em);
-    cell.kolmConf = smoothstep(0.03, 0.18, em);
-  }
-
-  // Ground cover vs canopy split
-  cell.canopy = clamp(cell.floraDensity * (cell.floraType === 'photosynthetic' ? 1.0 : 0.6), 0, 1);
-  cell.groundCover = clamp(cell.floraDensity * 0.8 + cell.saturation * 0.2, 0, 1);
-
-  // S24: Apply fitness-confidence modulation
-  cell.groundCover *= cell.pelaConf;
-  cell.canopy *= cell.kolmConf;
-
-  // R3-FIX2: barren gates canopy
-  // Barren cells have no living cover (safety net — the early return above
-  // should catch most cases, but this guards against edge cases)
-  if (cell.floraType === 'barren') {
-    cell.groundCover = 0;
-    cell.canopy = 0;
-    cell.chemoCrust = 0;
-    cell.organicContent = 0;
-  }
-}
-
 // ── Derive water state from water table depth ──
 // Replaces computeStandingWater. Instead of detecting topographic basins and
 // filling them (which produced concentric ring artifacts), this reads
@@ -413,4 +282,4 @@ function deriveWTDWater(cells, gridW, gridH) {
   console.log(`[WTD Diagnostic] Negative WTD cells: ${negWTD} | Non-zero wetness: ${nzWetness} | Non-zero pelaRaft: ${nzPelaRaft} | Non-zero kolmRelict: ${nzKolmRelict} | Min WTD: ${minWTD.toFixed(4)}`);
 }
 
-export { refineRegionalFloraFromHiRes, computeRegionalFloraCell, deriveWTDWater };
+export { refineRegionalFloraFromHiRes, deriveWTDWater };
