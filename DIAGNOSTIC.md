@@ -98,7 +98,7 @@ Two things stand out immediately:
 | Heap after one arrow-key pan | **1.74 GB** |
 | One tile chunk | 0.5–0.7 s |
 | Hi-res land cells whose land flag disagrees with the planetary cell (res ×2) | 1,772 of 16,586 = **10.7%** |
-| Mean hi-res groundwater on land whose bilinear footprint touches an ocean cell vs interior land | **0.59 vs 0.19** (planetary land mean 0.25); seed 7: 0.56 vs 0.24 |
+| Ocean-sentinel bleed at the default ×4: hi-res land cells whose bilinear footprint gives non-zero weight to an ocean cell | **10,141 cells (7.4% of land)**; their mean groundwater is **0.678** with plain bilinear vs **0.534** once ocean corners are masked (water availability 0.665 → 0.518) |
 | Regional elevation span in one 78 km window vs the planetary span in the same window | **0.134 vs 0.031** (regional noise adds 4× the real relief) |
 | Tile elevation span inside one 152 m regional cell (mid-slope grass, regional slope ≈0.001 across 3 cells) | **0.035** (35× the regional-scale variation over the same distance) |
 | Same tile chunk: water tiles / stream-order-3 tiles / trees | 27,751 (10.6%) / 12,838 / 0 — in a regional cell with no water |
@@ -126,10 +126,13 @@ region's chunk. Verified: cache size 1 before and after the pan.
 **A2. Ocean sentinel values bleed into coastal land.** Ocean cells are assigned
 `groundwater = 1.0` and `waterAvailability = 1.0` (`planet-atmosphere.js:~471,~532`).
 `stepHR2_atmosphereRow` then bilinearly interpolates those fields onto hi-res land with no land
-mask, and `regional-gen.js` does the same from the planetary grid. Result: every hi-res land cell
-within one planetary cell of the sea is ~3× wetter than the planet says (0.59 vs 0.19 measured),
-which drives the uniform coastal mud/marsh band and the "OCEAN-FLIP" diagnostics still in the
-code. 10.7% of hi-res land is planetary-ocean, so this touches a lot of coastline.
+mask, and `regional-gen.js` does the same from the planetary grid. Measured at the default ×4:
+7.4% of hi-res land cells take non-zero weight from an ocean corner, and on those cells plain
+bilinear gives mean groundwater 0.678 where the land-masked value is 0.534 (water availability
+0.665 vs 0.518). That +0.15 of invented wetness sits exactly on the coast band and feeds the
+uniform coastal mud/marsh and the "OCEAN-FLIP" diagnostics still in the code. (An earlier draft
+of this report quoted 0.59 vs 0.19 measured at ×1; that figure was wrong — at ×1 every hi-res
+cell has a single corner with weight 1, so it was measuring real coastal groundwater, not bleed.)
 *Fix:* land-masked bilinear for land-only fields (zero the weight of ocean corners, renormalise;
 fall back to nearest land corner when all four are ocean). `regional-gen.js:~880` already does
 exactly this for flora type (R3-FIX1) — reuse the pattern in `stepHR2` for precipitation,
@@ -155,11 +158,16 @@ one pan; add the ×8 hi-res grid (850 MB) and the tab is at Chrome's limit.
 until B3 makes regions cheap. ~10 lines. Cuts steady-state heap by >1 GB and removes ~9 s of
 jank per click.
 
-**A5. Atmosphere step allocates 8-element arrays inside the innermost loop.** `dx8/dy8` (and the
-`neighbors` object array in erosion) are created per cell per pass: ≈14 M array allocations per
-generation. Step 4 is 6–7 s of an 8–12 s planet generation at 131k cells.
-*Fix:* hoist the constant arrays to module scope; replace the erosion `neighbors` objects with
-two index arrays. ~20 lines. Expect step 4 to drop by half or more.
+**A5. Atmosphere step is 6–7 s of an 8–12 s planet generation at only 131k cells.** The
+obvious suspect (8-element offset arrays allocated per cell per pass, ≈14 M per generation) was
+hoisted to module scope and made **no measurable difference**: V8 was already eliding them. A CPU
+profile of one generation puts 42% of self time inside `step4_computeAtmosphere`, 7% in `wrapX`,
+and the hottest lines are plain property reads and writes on the cell objects
+(`state.cells[ni].isLand`, `c.windU = u`, `nc.windU * tdx`). The cost is object-per-cell access
+across ~100 full-grid passes, not allocation. The hoist is kept (cleaner, zero risk) but the real
+fix is **B7** below: the planetary grid as typed arrays, like `hiResData` already is. A cheaper
+interim lever is the iteration counts (`currentIterations` 25, `sstAdvectionIterations` 18,
+`moistureIterations` 35), which scale step 4 linearly.
 
 **A6. Eight tuning sliders do nothing.** `subPeakMin`, `subPeakMax`, `subPeakSpread`,
 `coastWidth`, `shapeNoiseAmp`, `drainageDepth`, `drainagePathsMin`, `drainagePathsMax` are in
@@ -245,6 +253,14 @@ code is full of `console.log` diagnostics ("Session 24", "S24", "R1-FIX3") inste
 low cost. Then `tools/probe.mjs` (Appendix C) can become a real regression harness, and the pure
 simulation modules can get Node tests.
 
+**B7. Planetary grid as typed arrays.** `state.cells` is 131k objects with ~45 properties plus a
+nested `minerals` object, and the profile (A5) shows step 4's 6–7 s is dominated by property
+access on them across ~100 grid passes. The same struct-of-arrays layout as `hiResData` would
+cut planet generation by a large factor, halve its memory, and make the simulation transferable
+to a Web Worker. It touches every consumer of `state.cells` (geology, atmosphere, flora,
+hires-gen, regional planetary sampling, renderers, snapshot panel), so it is a day of mechanical
+work; do it together with B3 so both grids end up with one accessor convention.
+
 ### Tier C — design points to settle before more features
 
 **C1. Land fraction.** Default `continentalBase = −0.08` puts continental crust *below* sea
@@ -304,8 +320,7 @@ the low-res 1.5-cell radius; it only does at ×2). Measured: 15° mean differenc
 
 1. **Day 1 — Tier A in one PR.** A1, A2, A3, A4, A5, A6, A7. All are local, none change the
    architecture, and together they fix the two things a user notices first (region not where
-   you clicked; coasts all mud) and stop the tab from eating 1.7 GB. Re-run `tools/probe.mjs`
-   before and after; the sentinel-bleed and click-offset numbers should collapse.
+   you clicked; coasts all mud) and stop the tab from eating 1.7 GB. **Applied — see §5.**
 2. **Day 2 — B2 then B6.** Delete the dead paths, extract `state.js`, lazy-init canvases. Pure
    subtraction plus a mechanical move; makes everything after it cheaper and testable.
 3. **Decide B1 + B5 + C1 together** (units, tile size, land fraction). These are design calls
@@ -321,6 +336,24 @@ the low-res 1.5-cell radius; it only does at ×2). Measured: 15° mean differenc
 What I would *not* do: add features, presets, or overlays before steps 1–3. Every one of the
 "R1-FIX"/"R2-FIX"/"S24" patches in the code is a symptom-level fix for a unit or resolution
 mismatch; more of those will keep the treadmill going.
+
+---
+
+## 5. Tier A — applied (same branch, second commit)
+
+| Item | Change | Before → after (`tools/probe.mjs`) |
+|---|---|---|
+| A1 | `tileChunkCache` cleared wherever `state.regionalCells` is replaced | chunk cache after a pan with the tile view closed: 1 → **0** |
+| A2 | land-masked bilinear for precipitation / groundwater / waterAvail in `stepHR2`; for waterAvailability / drainage in the regional planetary sample | mean groundwater on the 10,141 affected coastal cells: 0.678 → **0.534** |
+| A3 | click handlers pass fractional planetary coords; `mollweidePixelToCell` / `globePixelToCell` return fractional; labels and snapshot use the containing cell | regional centre vs click: 0.5 cell off → **exact** (centre at 122.40, 69.78 for a click at 122.40, 69.78) |
+| A4 | `MAX_CACHE_SIZE` 8 → 2; neighbour precompute removed | heap after one pan: 1,742 MB → **561 MB**; no 4×2.2 s freeze after each click |
+| A5 | offset arrays hoisted; erosion loop allocation-free | step 4: 6.1–6.8 s → **unchanged** (see A5 text; real fix is B7) |
+| A6 | 8 dead params and their sliders removed | — |
+| A7 | `'state.plates'` → `'plates'`; header comment fixed | — |
+
+Unchanged by design (Tier B/C work): 221 MB per region, regional relief 0.134 vs 0.031, tile
+relief 0.035 inside one regional cell, 15° drain-direction drift between ×1 and ×2, 10.7%
+land-mask disagreement. No console or page errors in any run.
 
 ---
 

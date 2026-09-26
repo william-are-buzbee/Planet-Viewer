@@ -60,24 +60,35 @@ log('ELEV SCALE:', JSON.stringify(await page.evaluate(async () => {
   return { maxLandElev: maxL, meanLandElev: sumL / nL, minOceanElev: minO };
 })));
 
-// ── 3. Ocean sentinel bleed: hi-res land whose bilinear footprint touches an ocean planetary cell ──
-log('OCEAN-SENTINEL BLEED:', JSON.stringify(await page.evaluate(async () => {
+// ── 3. Ocean sentinel bleed (measured at the default ×4, where bilinear weights are fractional;
+//       at ×1 every hi-res cell has a single corner with weight 1, so there is nothing to bleed) ──
+log('GEN res=4 seed 5:', await generate(4, 5));
+log('OCEAN-SENTINEL BLEED (×4): stored (land-masked) vs plain bilinear recomputed from the planetary grid, over hi-res land cells with a non-zero-weight ocean corner:',
+  JSON.stringify(await page.evaluate(async () => {
   const { state } = await import('/main.js');
   const W = 512, H = 256, m = state.hiResMultiplier, HRW = state.HR_W, HRH = state.HR_H, hr = state.hiResData;
-  let nCoast = 0, gwCoast = 0, nInt = 0, gwInt = 0;
-  for (let hy = 0; hy < HRH; hy++) for (let hx = 0; hx < HRW; hx++) {
-    const hi = hy * HRW + hx;
-    if (!hr.isLand[hi]) continue;
-    const x0 = Math.floor(hx / m), y0 = Math.floor(hy / m);
-    let anyOcean = false;
-    for (const [cx, cy] of [[x0, y0], [x0 + 1, y0], [x0, y0 + 1], [x0 + 1, y0 + 1]]) {
-      if (!state.cells[Math.max(0, Math.min(H - 1, cy)) * W + ((cx % W) + W) % W].isLand) anyOcean = true;
+  let n = 0, gwStored = 0, gwPlain = 0, waStored = 0, waPlain = 0, nLand = 0;
+  for (let hy = 0; hy < HRH; hy++) {
+    const ly = hy / m, y0 = Math.floor(ly), fy = ly - y0;
+    const r0 = Math.max(0, Math.min(H - 1, y0)) * W, r1 = Math.max(0, Math.min(H - 1, y0 + 1)) * W;
+    for (let hx = 0; hx < HRW; hx++) {
+      const hi = hy * HRW + hx;
+      if (!hr.isLand[hi]) continue;
+      nLand++;
+      const lx = hx / m, x0 = Math.floor(lx), fx = lx - x0;
+      const cs = [state.cells[r0 + x0 % W], state.cells[r0 + (x0 + 1) % W], state.cells[r1 + x0 % W], state.cells[r1 + (x0 + 1) % W]];
+      const ws = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+      let oceanW = 0, gw = 0, wa = 0;
+      for (let k = 0; k < 4; k++) { if (!cs[k].isLand) oceanW += ws[k]; gw += cs[k].groundwater * ws[k]; wa += cs[k].waterAvailability * ws[k]; }
+      if (oceanW <= 0) continue;
+      n++; gwStored += hr.groundwater[hi]; gwPlain += gw; waStored += hr.waterAvail[hi]; waPlain += wa;
     }
-    if (anyOcean) { nCoast++; gwCoast += hr.groundwater[hi]; } else { nInt++; gwInt += hr.groundwater[hi]; }
   }
-  let nL = 0, gwL = 0; for (const c of state.cells) if (c.isLand) { nL++; gwL += c.groundwater; }
-  return { hiresLandTouchingOcean: nCoast, hiresLandInterior: nInt, meanGW_touchingOcean: +(gwCoast / nCoast).toFixed(3), meanGW_interior: +(gwInt / nInt).toFixed(3), planetaryLandMeanGW: +(gwL / nL).toFixed(3) };
+  return { hiresLand: nLand, affectedLandCells: n, fracOfLand: +(n / nLand).toFixed(3),
+           meanGW_plainBilinear: +(gwPlain / n).toFixed(3), meanGW_stored: +(gwStored / n).toFixed(3),
+           meanWA_plainBilinear: +(waPlain / n).toFixed(3), meanWA_stored: +(waStored / n).toFixed(3) };
 })));
+log('GEN res=1 seed 7 (for the remaining measurements):', await generate(1, 7));
 
 // ── 4. Single-region cost (direct call, no UI, no neighbour precompute) ──
 const h0 = await heapMB();

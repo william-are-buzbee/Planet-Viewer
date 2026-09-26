@@ -9,6 +9,10 @@ import {
   sphereNoise, driftTo3D, wrappedDistSq, maxKey
 } from './core-math.js';
 
+// ── 8-neighbour offsets for erosion transport (same order as the old inline list) ──
+const EDX8 = [-1, 1, 0, 0, -1, 1, -1, 1];
+const EDY8 = [ 0, 0, -1, 1, -1, -1, 1, 1];
+
 // ── Spatial index for geological seeds ──
 const GRID_SIZE = 20;
 const GRID_W = Math.ceil(W / GRID_SIZE);
@@ -698,43 +702,40 @@ function step3_computeMinerals(seed, rng) {
       snapManganese[i] = state.cells[i].minerals.manganese;
     }
 
+    // Scratch buffers for the (at most 8) lower neighbours of a cell — reused
+    // across cells so the loop allocates nothing.
+    const lowerIdx = new Int32Array(8);
+    const lowerDiff = new Float32Array(8);
+
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
         const c = state.cells[ci];
         const elev = c.elevation;
 
-        const neighbors = [
-          { nx: wrapX(x - 1), ny: y },
-          { nx: wrapX(x + 1), ny: y },
-          { nx: x,            ny: y - 1 },
-          { nx: x,            ny: y + 1 },
-          { nx: wrapX(x - 1), ny: y - 1 },
-          { nx: wrapX(x + 1), ny: y - 1 },
-          { nx: wrapX(x - 1), ny: y + 1 },
-          { nx: wrapX(x + 1), ny: y + 1 },
-        ];
-
-        let totalDiff = 0;
-        const lowerNeighbors = [];
-        for (const n of neighbors) {
-          if (n.ny < 0 || n.ny >= H) continue;
-          const ni = n.ny * W + n.nx;
+        let totalDiff = 0, lowerCount = 0;
+        for (let d = 0; d < 8; d++) {
+          const ny = y + EDY8[d];
+          if (ny < 0 || ny >= H) continue;
+          const ni = ny * W + wrapX(x + EDX8[d]);
           const nElev = state.cells[ni].elevation;
           if (nElev < elev) {
             const diff = elev - nElev;
-            lowerNeighbors.push({ idx: ni, diff });
+            lowerIdx[lowerCount] = ni;
+            lowerDiff[lowerCount] = diff;
+            lowerCount++;
             totalDiff += diff;
           }
         }
 
         if (totalDiff > 0) {
           const transferRate = state.params.erosionRate;
-          for (const n of lowerNeighbors) {
-            const fraction = (n.diff / totalDiff) * transferRate;
-            state.cells[n.idx].minerals.iron      += snapIron[ci] * fraction;
-            state.cells[n.idx].minerals.copper    += snapCopper[ci] * fraction;
-            state.cells[n.idx].minerals.manganese += snapManganese[ci] * fraction;
+          for (let k = 0; k < lowerCount; k++) {
+            const fraction = (lowerDiff[k] / totalDiff) * transferRate;
+            const tgt = state.cells[lowerIdx[k]].minerals;
+            tgt.iron      += snapIron[ci] * fraction;
+            tgt.copper    += snapCopper[ci] * fraction;
+            tgt.manganese += snapManganese[ci] * fraction;
           }
           c.minerals.iron      -= snapIron[ci] * transferRate;
           c.minerals.copper    -= snapCopper[ci] * transferRate;

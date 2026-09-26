@@ -905,6 +905,20 @@ function generateRegionalDetailHiRes(centerX, centerY) {
       const pw01 = (1 - pfx) * pfy;
       const pw11 = pfx * pfy;
 
+      // Land-only planetary fields (waterAvailability = 1.0 and drainage = 0 on
+      // ocean cells are sentinels, not physics): for regional LAND cells, zero the
+      // weight of ocean corners and renormalise so coasts are not smeared wet.
+      let lw00 = pw00, lw10 = pw10, lw01 = pw01, lw11 = pw11;
+      if (elev > 0) {
+        lw00 = pc00.isLand ? pw00 : 0;
+        lw10 = pc10.isLand ? pw10 : 0;
+        lw01 = pc01.isLand ? pw01 : 0;
+        lw11 = pc11.isLand ? pw11 : 0;
+        const ls = lw00 + lw10 + lw01 + lw11;
+        if (ls > 0) { lw00 /= ls; lw10 /= ls; lw01 /= ls; lw11 /= ls; }
+        else        { lw00 = pw00; lw10 = pw10; lw01 = pw01; lw11 = pw11; }
+      }
+
       const cell = {
         rx, ry,
         worldX, worldY,
@@ -914,10 +928,10 @@ function generateRegionalDetailHiRes(centerX, centerY) {
         // planetary-sampled atmospheric fields (batched inline bilinear)
         precipitation: hrPrecip,
         groundwater: hrGW,
-        waterAvailability: pc00.waterAvailability*pw00 + pc10.waterAvailability*pw10 + pc01.waterAvailability*pw01 + pc11.waterAvailability*pw11,
+        waterAvailability: pc00.waterAvailability*lw00 + pc10.waterAvailability*lw10 + pc01.waterAvailability*lw01 + pc11.waterAvailability*lw11,
         atmosphericMoisture: pc00.atmosphericMoisture*pw00 + pc10.atmosphericMoisture*pw10 + pc01.atmosphericMoisture*pw01 + pc11.atmosphericMoisture*pw11,
         temperature: pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11,
-        drainage: pc00.drainage*pw00 + pc10.drainage*pw10 + pc01.drainage*pw01 + pc11.drainage*pw11,
+        drainage: pc00.drainage*lw00 + pc10.drainage*lw10 + pc01.drainage*lw01 + pc11.drainage*lw11,
         windSpeed: pc00.windSpeed*pw00 + pc10.windSpeed*pw10 + pc01.windSpeed*pw01 + pc11.windSpeed*pw11,
         sst: pc00.sst*pw00 + pc10.sst*pw10 + pc01.sst*pw01 + pc11.sst*pw11,
         volcanism: hrVolc,
