@@ -33,7 +33,7 @@ tests, no README, no lint config; git history is 20 "Add files via upload" commi
 
 ```
 main.js            state object (single shared mutable store) + runGeneration()
- ├─ planet-gen.js         orchestrates steps 1–5b on state.cells (131k JS objects)
+ ├─ planet-gen.js         orchestrates steps 1–5b on state.cells (a PlanetGrid, planet-grid.js)
  │   ├─ planet-geology.js     plates → geo seeds → elevation → bathymetry → minerals
  │   ├─ planet-atmosphere.js  wind → currents → SST → moisture/precip → groundwater → drainage → temp
  │   └─ terrain-derive.js     THE terrain/cover classifier (shared by all layers)
@@ -60,7 +60,7 @@ re-implemented per layer.
 
 | Layer | Grid | Covers | Cell size | Storage |
 |---|---|---|---|---|
-| Planetary | 512×256 | whole planet (≈40,000 km circumference) | ≈78 km | 131k JS objects, ~45 props each |
+| Planetary | 512×256 | whole planet (≈40,000 km circumference) | ≈78 km | ~~131k JS objects~~ **typed arrays (`planet-grid.js`, Float64), since B7** |
 | Hi-res | 512m×256m (m = 1,2,4,8) | whole planet | 78 / 39 / 19.5 / 9.75 km | typed arrays, ~101 B/cell (≈212 MB at ×4, ≈850 MB at ×8) |
 | Regional | 512×512 | **one** planetary cell (78 km) | ≈152 m | ~~262k JS objects ≈ 221 MB~~ **typed arrays, 36.8 MB per region** (since B3) |
 | Tile | ~~512×512~~ **128×128** (since B5) | one regional cell (152 m) | ~~0.30 m~~ **≈1.19 m** | typed arrays, ~1 MB per chunk |
@@ -512,6 +512,29 @@ Known limits, in order of visibility:
   5 drains about 35 hi-res cells. On an archipelago catchments are small anyway, and changing the
   hi-res layer would change the planet overlays the person anchors on, so it was left alone.
   Applying `routeFlow` there is a one-line change when wanted.
+
+## 11. B7 — applied (planetary grid as typed arrays)
+
+`planet-grid.js` holds the planetary grid as struct-of-arrays. The continuous fields are
+`Float64Array` deliberately: the pipeline was tuned in double precision and seed 5 is the anchor,
+so the layout change had to move nothing. It moved nothing: a 37-line checksum of every planetary
+field (sums, order-sensitive hashes, enum histograms, a hi-res sample) is identical before and
+after. Plate type, boundary type, flora type and terrain type are enums; `cell(i)` materialises the
+old named-field object for the snapshot panel and the tools. Fields nothing read (`isDepleted`,
+`dominant`, `proximity`, `moisture`, `baseMoisture`, the `wind` object) are gone.
+
+| seed 5, browser | before | after |
+|---|---|---|
+| planet generation | 11.6–12.4 s | **6.2 s** |
+| step 4 (atmosphere) | 6.9–7.4 s | **3.8 s** |
+| step 1 (plates) / step 3 (minerals) | 0.75 s / 1.6 s | 0.15 s / 0.67 s |
+| every planetary field | — | **bit-identical** |
+| Node smoke test planet step | 14 s | 6.6 s |
+
+This closes A5/B7: the profile had said the atmosphere step was bound by property access on 131k
+cell objects, and halving it by changing only the layout confirms it. The remaining 3.8 s is the
+iteration counts (`currentIterations` 25, `sstAdvectionIterations` 18, `moistureIterations` 35)
+times ~100 full-grid passes; further speed is a Web Worker, not a data structure.
 
 ## Appendix A — Dead code inventory (deleted in B2; kept as the record of what was there)
 

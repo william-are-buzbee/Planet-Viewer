@@ -30,9 +30,9 @@ await generatePlanet(seed);
 say(`planet   seed=${seed}  ${(performance.now() - t0).toFixed(0)} ms`);
 console.log = realLog;
 
-check(state.cells && state.cells.length === TOTAL, `planet grid has ${TOTAL} cells`);
+check(state.cells && state.cells.N === TOTAL, `planet grid has ${TOTAL} cells`);
 let land = 0, nanElev = 0, nanPrecip = 0, minE = Infinity, maxE = -Infinity;
-for (const c of state.cells) {
+for (const c of state.cells.all()) {
   if (c.isLand) land++;
   if (c.elevation !== c.elevation) nanElev++;
   if (c.precipitation !== c.precipitation) nanPrecip++;
@@ -72,7 +72,7 @@ let maskMismatch = 0, mixedCells = 0, noLandWeight = 0;
     let landW = 0, oceanW = 0, acc = 0;
     for (const [cx, cy, w] of corners) {
       if (w <= 0) continue;
-      const c = state.cells[Math.max(0, Math.min(H - 1, cy)) * W + ((cx % W) + W) % W];
+      const c = state.cells.cell(Math.max(0, Math.min(H - 1, cy)) * W + ((cx % W) + W) % W);
       if (c.isLand) { landW += w; acc += w * c.groundwater; } else oceanW += w;
     }
     if (landW === 0) { noLandWeight++; continue; }
@@ -88,7 +88,7 @@ check(maskMismatch === 0, `A2: stored groundwater equals the land-masked bilinea
 // A land cell with some elevation for the regional / tile checks
 let px = -1, py = -1;
 for (let y = 40; y < H - 40 && px < 0; y++) for (let x = 0; x < W; x++) {
-  const c = state.cells[y * W + x];
+  const c = state.cells.cell(y * W + x);
   if (c.isLand && c.elevation > 0.08) { px = x; py = y; break; }
 }
 check(px >= 0, `found a land cell for the regional test (${px}, ${py})`);

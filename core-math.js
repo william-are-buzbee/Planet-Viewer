@@ -152,14 +152,6 @@ export function driftTo3D(centerX, centerY, angleDeg, speed) {
   };
 }
 
-export function maxKey(obj) {
-  let best = null, bestVal = -Infinity;
-  for (const k in obj) {
-    if (obj[k] > bestVal) { bestVal = obj[k]; best = k; }
-  }
-  return best;
-}
-
 export function getLatitudeBand(y) {
   if (y < 25 || y >= 230) return 'polar';
   if (y < 64 || y >= 192) return 'temperate';

@@ -20,7 +20,7 @@ function bilinearInterpolate(x, y, accessor) {
   function getCell(cx, cy) {
     const wx = ((Math.round(cx) % W) + W) % W;
     const wy = clamp(Math.round(cy), 0, H - 1);
-    return state.cells[wy * W + wx];
+    return wy * W + wx;   // planetary cell index
   }
   const v00 = accessor(getCell(x0, y0));
   const v10 = accessor(getCell(x0 + 1, y0));
@@ -70,6 +70,7 @@ function hrSphere(hx, hy) {
 }
 
 function stepHR1_elevationRow(hy, seed) {
+  const P = state.cells;
   const ly = hy / state.hiResMultiplier;
   // Precompute y-axis corners (constant for the whole row)
   const y0 = Math.floor(ly);
@@ -89,8 +90,8 @@ function stepHR1_elevationRow(hy, seed) {
     const fx = lx - x0;
     const wx0 = ((x0 % W) + W) % W;
     const wx1 = ((x0 + 1) % W + W) % W;
-    const baseElev = state.cells[row0+wx0].elevation*(1-fx)*omy + state.cells[row0+wx1].elevation*fx*omy
-                   + state.cells[row1+wx0].elevation*(1-fx)*fy   + state.cells[row1+wx1].elevation*fx*fy;
+    const baseElev = P.elevation[row0+wx0]*(1-fx)*omy + P.elevation[row0+wx1]*fx*omy
+                   + P.elevation[row1+wx0]*(1-fx)*fy   + P.elevation[row1+wx1]*fx*fy;
     const s = hrSphere(hx, hy);
 
     // Multi-octave coastline noise (only near sea level)
@@ -163,6 +164,7 @@ function stepHR1b_drainDirRow(hy) {
 // then inline all field reads. Eliminates 11 redundant floor/mod/clamp
 // computations per cell × 2.1M cells.
 function stepHR2_atmosphereRow(hy) {
+  const P = state.cells;
   const ly = hy / state.hiResMultiplier;
   const y0 = Math.floor(ly);
   const fy = ly - y0;
@@ -182,10 +184,10 @@ function stepHR2_atmosphereRow(hy) {
     const wx0 = ((x0 % W) + W) % W;
     const wx1 = ((x0 + 1) % W + W) % W;
 
-    const c00 = state.cells[row0 + wx0];
-    const c10 = state.cells[row0 + wx1];
-    const c01 = state.cells[row1 + wx0];
-    const c11 = state.cells[row1 + wx1];
+    const c00 = row0 + wx0;
+    const c10 = row0 + wx1;
+    const c01 = row1 + wx0;
+    const c11 = row1 + wx1;
 
     const w00 = (1 - fx) * omy;
     const w10 = fx * omy;
@@ -199,32 +201,32 @@ function stepHR2_atmosphereRow(hy) {
     // pixel sitting inside a planetary-ocean cell).
     let l00 = w00, l10 = w10, l01 = w01, l11 = w11;
     if (state.hiResData.isLand[hi]) {
-      l00 = c00.isLand ? w00 : 0;
-      l10 = c10.isLand ? w10 : 0;
-      l01 = c01.isLand ? w01 : 0;
-      l11 = c11.isLand ? w11 : 0;
+      l00 = P.isLand[c00] ? w00 : 0;
+      l10 = P.isLand[c10] ? w10 : 0;
+      l01 = P.isLand[c01] ? w01 : 0;
+      l11 = P.isLand[c11] ? w11 : 0;
       const ls = l00 + l10 + l01 + l11;
       if (ls > 0) { l00 /= ls; l10 /= ls; l01 /= ls; l11 /= ls; }
       else        { l00 = w00; l10 = w10; l01 = w01; l11 = w11; }
     }
 
     // Inline bilinear interpolation for all 12 continuous fields
-    state.hiResData.precipitation[hi] = c00.precipitation*l00 + c10.precipitation*l10 + c01.precipitation*l01 + c11.precipitation*l11;
-    state.hiResData.groundwater[hi]   = c00.groundwater*l00 + c10.groundwater*l10 + c01.groundwater*l01 + c11.groundwater*l11;
-    state.hiResData.waterAvail[hi]    = (c00.waterAvailability||0)*l00 + (c10.waterAvailability||0)*l10 + (c01.waterAvailability||0)*l01 + (c11.waterAvailability||0)*l11;
-    state.hiResData.volcanism[hi]     = (c00.volcanism||0)*w00 + (c10.volcanism||0)*w10 + (c01.volcanism||0)*w01 + (c11.volcanism||0)*w11;
-    state.hiResData.iron[hi]          = c00.minerals.iron*w00 + c10.minerals.iron*w10 + c01.minerals.iron*w01 + c11.minerals.iron*w11;
-    state.hiResData.copper[hi]        = c00.minerals.copper*w00 + c10.minerals.copper*w10 + c01.minerals.copper*w01 + c11.minerals.copper*w11;
-    state.hiResData.manganese[hi]     = c00.minerals.manganese*w00 + c10.minerals.manganese*w10 + c01.minerals.manganese*w01 + c11.minerals.manganese*w11;
-    state.hiResData.windU[hi]         = (c00.windU||0)*w00 + (c10.windU||0)*w10 + (c01.windU||0)*w01 + (c11.windU||0)*w11;
-    state.hiResData.windV[hi]         = (c00.windV||0)*w00 + (c10.windV||0)*w10 + (c01.windV||0)*w01 + (c11.windV||0)*w11;
-    state.hiResData.windSpeed[hi]     = (c00.windSpeed||0)*w00 + (c10.windSpeed||0)*w10 + (c01.windSpeed||0)*w01 + (c11.windSpeed||0)*w11;
-    state.hiResData.temperature[hi]   = (c00.temperature||0)*w00 + (c10.temperature||0)*w10 + (c01.temperature||0)*w01 + (c11.temperature||0)*w11;
-    state.hiResData.sst[hi]           = (c00.sst||0)*w00 + (c10.sst||0)*w10 + (c01.sst||0)*w01 + (c11.sst||0)*w11;
+    state.hiResData.precipitation[hi] = P.precipitation[c00]*l00 + P.precipitation[c10]*l10 + P.precipitation[c01]*l01 + P.precipitation[c11]*l11;
+    state.hiResData.groundwater[hi]   = P.groundwater[c00]*l00 + P.groundwater[c10]*l10 + P.groundwater[c01]*l01 + P.groundwater[c11]*l11;
+    state.hiResData.waterAvail[hi]    = (P.waterAvailability[c00]||0)*l00 + (P.waterAvailability[c10]||0)*l10 + (P.waterAvailability[c01]||0)*l01 + (P.waterAvailability[c11]||0)*l11;
+    state.hiResData.volcanism[hi]     = (P.volcanism[c00]||0)*w00 + (P.volcanism[c10]||0)*w10 + (P.volcanism[c01]||0)*w01 + (P.volcanism[c11]||0)*w11;
+    state.hiResData.iron[hi]          = P.iron[c00]*w00 + P.iron[c10]*w10 + P.iron[c01]*w01 + P.iron[c11]*w11;
+    state.hiResData.copper[hi]        = P.copper[c00]*w00 + P.copper[c10]*w10 + P.copper[c01]*w01 + P.copper[c11]*w11;
+    state.hiResData.manganese[hi]     = P.manganese[c00]*w00 + P.manganese[c10]*w10 + P.manganese[c01]*w01 + P.manganese[c11]*w11;
+    state.hiResData.windU[hi]         = (P.windU[c00]||0)*w00 + (P.windU[c10]||0)*w10 + (P.windU[c01]||0)*w01 + (P.windU[c11]||0)*w11;
+    state.hiResData.windV[hi]         = (P.windV[c00]||0)*w00 + (P.windV[c10]||0)*w10 + (P.windV[c01]||0)*w01 + (P.windV[c11]||0)*w11;
+    state.hiResData.windSpeed[hi]     = (P.windSpeed[c00]||0)*w00 + (P.windSpeed[c10]||0)*w10 + (P.windSpeed[c01]||0)*w01 + (P.windSpeed[c11]||0)*w11;
+    state.hiResData.temperature[hi]   = (P.temperature[c00]||0)*w00 + (P.temperature[c10]||0)*w10 + (P.temperature[c01]||0)*w01 + (P.temperature[c11]||0)*w11;
+    state.hiResData.sst[hi]           = (P.sst[c00]||0)*w00 + (P.sst[c10]||0)*w10 + (P.sst[c01]||0)*w01 + (P.sst[c11]||0)*w11;
 
     // Freezing + plate id carried from nearest low-res cell (discrete fields)
-    state.hiResData.isFreezing[hi] = c00.isFreezing ? 1 : 0;
-    state.hiResData.plateId[hi]    = c00.plateId || 0;
+    state.hiResData.isFreezing[hi] = P.isFreezing[c00] ? 1 : 0;
+    state.hiResData.plateId[hi]    = P.plateId[c00] || 0;
   }
 }
 
@@ -396,7 +398,7 @@ function stepHR6_floraRow(hy) {
         // Check if planetary grid considers this land (Session 24c isLand fix)
         const lx = hx / state.hiResMultiplier;
         const ly = hy / state.hiResMultiplier;
-        const baseElev = bilinearInterpolate(lx, ly, c => c.elevation);
+        const baseElev = bilinearInterpolate(lx, ly, i => state.cells.elevation[i]);
 
         // DIAGNOSTIC 1 — log near-coast cells flipped to ocean by noise
         if (baseElev > 0 && baseElev < 0.03) {

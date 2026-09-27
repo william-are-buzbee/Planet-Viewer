@@ -15,6 +15,7 @@ const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
 
 // ── Step 4: Hydrological System ──
 async function step4_computeAtmosphere(seed, rng) {
+  const P = state.cells;
 
   // ── Step 4a: Wind Vector Field ──
   setStatus('Generating wind field…');
@@ -65,8 +66,8 @@ async function step4_computeAtmosphere(seed, rng) {
     }
 
     for (let x = 0; x < W; x++) {
-      const c = state.cells[y * W + x];
-      c.windU = u;
+      const c = y * W + x;
+      P.windU[c] = u;
 
       let v = 0;
       if (absLat < itcz) {
@@ -81,8 +82,8 @@ async function step4_computeAtmosphere(seed, rng) {
         v = lat > 0 ? -vMag : vMag;
       }
 
-      c.windV = v;
-      c.windSpeed = spd;
+      P.windV[c] = v;
+      P.windSpeed[c] = spd;
     }
   }
 
@@ -91,19 +92,19 @@ async function step4_computeAtmosphere(seed, rng) {
     const snapU = new Float32Array(TOTAL);
     const snapV = new Float32Array(TOTAL);
     for (let i = 0; i < TOTAL; i++) {
-      snapU[i] = state.cells[i].windU;
-      snapV[i] = state.cells[i].windV;
+      snapU[i] = P.windU[i];
+      snapV[i] = P.windV[i];
     }
 
     for (let y = 1; y < H - 1; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
-        if (!c.isLand) continue;
+        const c = ci;
+        if (!P.isLand[c]) continue;
 
         const xp = wrapX(x + 1), xm = wrapX(x - 1);
-        const gradX = (state.cells[y * W + xp].elevation - state.cells[y * W + xm].elevation) / 2;
-        const gradY = (state.cells[(y + 1) * W + x].elevation - state.cells[(y - 1) * W + x].elevation) / 2;
+        const gradX = (P.elevation[y * W + xp] - P.elevation[y * W + xm]) / 2;
+        const gradY = (P.elevation[(y + 1) * W + x] - P.elevation[(y - 1) * W + x]) / 2;
         const gradMag = Math.sqrt(gradX * gradX + gradY * gradY);
         if (gradMag < 0.001) continue;
 
@@ -118,16 +119,16 @@ async function step4_computeAtmosphere(seed, rng) {
         const windAlongGradU = projFactor * gradX;
         const windAlongGradV = projFactor * gradY;
 
-        c.windU -= windAlongGradU * block;
-        c.windV -= windAlongGradV * block;
+        P.windU[c] -= windAlongGradU * block;
+        P.windV[c] -= windAlongGradV * block;
 
-        c.windU += (-gradY) * block * state.params.windDeflectionFactor;
-        c.windV += gradX * block * state.params.windDeflectionFactor;
+        P.windU[c] += (-gradY) * block * state.params.windDeflectionFactor;
+        P.windV[c] += gradX * block * state.params.windDeflectionFactor;
       }
     }
 
     for (let i = 0; i < TOTAL; i++) {
-      state.cells[i].windSpeed = Math.sqrt(state.cells[i].windU * state.cells[i].windU + state.cells[i].windV * state.cells[i].windV);
+      P.windSpeed[i] = Math.sqrt(P.windU[i] * P.windU[i] + P.windV[i] * P.windV[i]);
     }
   }
 
@@ -140,41 +141,41 @@ async function step4_computeAtmosphere(seed, rng) {
     const snapCU = new Float32Array(TOTAL);
     const snapCV = new Float32Array(TOTAL);
     for (let i = 0; i < TOTAL; i++) {
-      snapCU[i] = state.cells[i].currentU;
-      snapCV[i] = state.cells[i].currentV;
+      snapCU[i] = P.currentU[i];
+      snapCV[i] = P.currentV[i];
     }
 
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
-        if (c.isLand) continue;
+        const c = ci;
+        if (P.isLand[c]) continue;
 
-        c.currentU += c.windU * state.params.currentStressCoeff;
-        c.currentV += c.windV * state.params.currentStressCoeff;
+        P.currentU[c] += P.windU[c] * state.params.currentStressCoeff;
+        P.currentV[c] += P.windV[c] * state.params.currentStressCoeff;
 
         const lat = (y / H) * 180 - 90;
         const latRad = lat * Math.PI / 180;
         const f = Math.sin(latRad);
         const angle = f * state.params.currentCoriolisStrength;
         const cosA = Math.cos(angle), sinA = Math.sin(angle);
-        const newU = c.currentU * cosA - c.currentV * sinA;
-        const newV = c.currentU * sinA + c.currentV * cosA;
-        c.currentU = newU;
-        c.currentV = newV;
+        const newU = P.currentU[c] * cosA - P.currentV[c] * sinA;
+        const newV = P.currentU[c] * sinA + P.currentV[c] * cosA;
+        P.currentU[c] = newU;
+        P.currentV[c] = newV;
         for (let d = 0; d < 4; d++) {
           const nx = wrapX(x + dx4[d]);
           const ny = y + dy4[d];
           if (ny < 0 || ny >= H) continue;
           const ni = ny * W + nx;
-          if (state.cells[ni].isLand) {
+          if (P.isLand[ni]) {
             const ldx = dx4[d], ldy = dy4[d];
-            const towardLand = c.currentU * ldx + c.currentV * ldy;
+            const towardLand = P.currentU[c] * ldx + P.currentV[c] * ldy;
             if (towardLand > 0) {
-              c.currentU -= towardLand * ldx;
-              c.currentV -= towardLand * ldy;
-              c.currentU += (-ldy) * towardLand * 0.5;
-              c.currentV += ldx * towardLand * 0.5;
+              P.currentU[c] -= towardLand * ldx;
+              P.currentV[c] -= towardLand * ldy;
+              P.currentU[c] += (-ldy) * towardLand * 0.5;
+              P.currentV[c] += ldx * towardLand * 0.5;
             }
           }
         }
@@ -184,7 +185,7 @@ async function step4_computeAtmosphere(seed, rng) {
           const ny = y + dy8[d];
           if (ny < 0 || ny >= H) continue;
           const ni = ny * W + nx;
-          if (state.cells[ni].isLand) continue;
+          if (P.isLand[ni]) continue;
           const tdx = -dx8[d], tdy = -dy8[d];
           const tLen = Math.sqrt(tdx * tdx + tdy * tdy);
           const dot = (snapCU[ni] * tdx + snapCV[ni] * tdy) / tLen;
@@ -200,24 +201,24 @@ async function step4_computeAtmosphere(seed, rng) {
           totalInflowU *= scale;
           totalInflowV *= scale;
         }
-        c.currentU += totalInflowU;
-        c.currentV += totalInflowV;
+        P.currentU[c] += totalInflowU;
+        P.currentV[c] += totalInflowV;
 
-        c.currentU *= (1.0 - state.params.currentFriction);
-        c.currentV *= (1.0 - state.params.currentFriction);
+        P.currentU[c] *= (1.0 - state.params.currentFriction);
+        P.currentV[c] *= (1.0 - state.params.currentFriction);
 
-        const speed = Math.sqrt(c.currentU * c.currentU + c.currentV * c.currentV);
+        const speed = Math.sqrt(P.currentU[c] * P.currentU[c] + P.currentV[c] * P.currentV[c]);
         if (speed > state.params.maxCurrentSpeed) {
-          c.currentU *= state.params.maxCurrentSpeed / speed;
-          c.currentV *= state.params.maxCurrentSpeed / speed;
+          P.currentU[c] *= state.params.maxCurrentSpeed / speed;
+          P.currentV[c] *= state.params.maxCurrentSpeed / speed;
         }
       }
     }
   }
 
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    c.currentSpeed = Math.sqrt(c.currentU * c.currentU + c.currentV * c.currentV);
+    const c = i;
+    P.currentSpeed[c] = Math.sqrt(P.currentU[c] * P.currentU[c] + P.currentV[c] * P.currentV[c]);
   }
 
   for (let y = 0; y < H; y++) {
@@ -225,9 +226,9 @@ async function step4_computeAtmosphere(seed, rng) {
     const absLat = Math.abs(lat);
     const baseSst = 1.0 - (absLat / 90) * 0.6;
     for (let x = 0; x < W; x++) {
-      const c = state.cells[y * W + x];
-      if (!c.isLand) {
-        c.sst = baseSst;
+      const c = y * W + x;
+      if (!P.isLand[c]) {
+        P.sst[c] = baseSst;
       }
     }
   }
@@ -235,21 +236,21 @@ async function step4_computeAtmosphere(seed, rng) {
   const numSstIter = Math.round(state.params.sstAdvectionIterations);
   for (let iter = 0; iter < numSstIter; iter++) {
     const snapSST = new Float32Array(TOTAL);
-    for (let i = 0; i < TOTAL; i++) snapSST[i] = state.cells[i].sst;
+    for (let i = 0; i < TOTAL; i++) snapSST[i] = P.sst[i];
 
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
-        if (c.isLand) continue;
+        const c = ci;
+        if (P.isLand[c]) continue;
 
-        const srcX = x - Math.round(clamp(c.currentU * 2, -2, 2));
-        const srcY = y - Math.round(clamp(c.currentV * 2, -2, 2));
+        const srcX = x - Math.round(clamp(P.currentU[c] * 2, -2, 2));
+        const srcY = y - Math.round(clamp(P.currentV[c] * 2, -2, 2));
         const wsx = wrapX(srcX);
         const wsy = clamp(srcY, 0, H - 1);
         const si = wsy * W + wsx;
-        if (!state.cells[si].isLand) {
-          c.sst += (snapSST[si] - c.sst) * state.params.sstMixRate;
+        if (!P.isLand[si]) {
+          P.sst[c] += (snapSST[si] - P.sst[c]) * state.params.sstMixRate;
         }
       }
     }
@@ -258,22 +259,22 @@ async function step4_computeAtmosphere(seed, rng) {
   for (let y = 1; y < H - 1; y++) {
     for (let x = 0; x < W; x++) {
       const ci = y * W + x;
-      const c = state.cells[ci];
-      if (c.isLand) continue;
+      const c = ci;
+      if (P.isLand[c]) continue;
 
       const lat = (y / H) * 180 - 90;
       let isCoastal = false;
       for (let d = 0; d < 4; d++) {
         const nx = wrapX(x + dx4[d]);
         const ny = y + dy4[d];
-        if (ny >= 0 && ny < H && state.cells[ny * W + nx].isLand) {
+        if (ny >= 0 && ny < H && P.isLand[ny * W + nx]) {
           isCoastal = true;
-          const ekmanU = lat > 0 ? c.windV : -c.windV;
-          const ekmanV = lat > 0 ? -c.windU : c.windU;
+          const ekmanU = lat > 0 ? P.windV[c] : -P.windV[c];
+          const ekmanV = lat > 0 ? -P.windU[c] : P.windU[c];
           const awayDot = ekmanU * dx4[d] + ekmanV * dy4[d];
           if (awayDot < -0.1) {
-            c.sst -= state.params.upwellingCooling * Math.min(1, Math.abs(awayDot));
-            c.sst = Math.max(0.15, c.sst);
+            P.sst[c] -= state.params.upwellingCooling * Math.min(1, Math.abs(awayDot));
+            P.sst[c] = Math.max(0.15, P.sst[c]);
           }
         }
       }
@@ -281,8 +282,8 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   for (let i = 0; i < TOTAL; i++) {
-    if (!state.cells[i].isLand) {
-      state.cells[i].sst = Math.max(state.cells[i].sst, state.params.sstFloor);
+    if (!P.isLand[i]) {
+      P.sst[i] = Math.max(P.sst[i], state.params.sstFloor);
     }
   }
 
@@ -295,7 +296,7 @@ async function step4_computeAtmosphere(seed, rng) {
 
   let maxWindSpeed = 0.01;
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].windSpeed > maxWindSpeed) maxWindSpeed = state.cells[i].windSpeed;
+    if (P.windSpeed[i] > maxWindSpeed) maxWindSpeed = P.windSpeed[i];
   }
 
   const numMoistIter = Math.round(state.params.moistureIterations);
@@ -304,10 +305,10 @@ async function step4_computeAtmosphere(seed, rng) {
     for (let i = 0; i < TOTAL; i++) snap[i] = moisture[i];
 
     for (let i = 0; i < TOTAL; i++) {
-      const c = state.cells[i];
-      if (!c.isLand) {
-        const thermalEvap = c.sst * c.sst * state.params.thermalEvapFactor * state.params.atmosphericPressure;
-        const windEvap = (c.windSpeed / maxWindSpeed) * c.sst * state.params.windEvapFactor * state.params.atmosphericPressure;
+      const c = i;
+      if (!P.isLand[c]) {
+        const thermalEvap = P.sst[c] * P.sst[c] * state.params.thermalEvapFactor * state.params.atmosphericPressure;
+        const windEvap = (P.windSpeed[c] / maxWindSpeed) * P.sst[c] * state.params.windEvapFactor * state.params.atmosphericPressure;
         let evapRate = thermalEvap + windEvap;
         if (evapRate <= 0) {
           evapRate = 0.05;
@@ -326,12 +327,12 @@ async function step4_computeAtmosphere(seed, rng) {
           const ny = y + dy8[d];
           if (ny < 0 || ny >= H) continue;
           const ni = ny * W + nx;
-          const nc = state.cells[ni];
+          const nc = ni;
           const tdx = -dx8[d], tdy = -dy8[d];
           const tLen = Math.sqrt(tdx * tdx + tdy * tdy);
-          const dot = (nc.windU * tdx + nc.windV * tdy) / tLen;
+          const dot = (P.windU[nc] * tdx + P.windV[nc] * tdy) / tLen;
           if (dot > 0) {
-            const transfer = snap[ni] * dot * nc.windSpeed * 0.12;
+            const transfer = snap[ni] * dot * P.windSpeed[nc] * 0.12;
             incoming += transfer;
           }
         }
@@ -343,7 +344,7 @@ async function step4_computeAtmosphere(seed, rng) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
+        const c = ci;
         let totalOut = 0;
         for (let d = 0; d < 8; d++) {
           const nx = wrapX(x + dx8[d]);
@@ -351,9 +352,9 @@ async function step4_computeAtmosphere(seed, rng) {
           if (ny < 0 || ny >= H) continue;
           const tdx = dx8[d], tdy = dy8[d];
           const tLen = Math.sqrt(tdx * tdx + tdy * tdy);
-          const dot = (c.windU * tdx + c.windV * tdy) / tLen;
+          const dot = (P.windU[c] * tdx + P.windV[c] * tdy) / tLen;
           if (dot > 0) {
-            totalOut += dot * c.windSpeed * 0.12;
+            totalOut += dot * P.windSpeed[c] * 0.12;
           }
         }
         const outRate = Math.min(totalOut, 0.9);
@@ -365,26 +366,26 @@ async function step4_computeAtmosphere(seed, rng) {
     for (let y = 1; y < H - 1; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
+        const c = ci;
         if (moisture[ci] <= 0) continue;
 
         let oroPrecip = 0;
         let convPrecip = 0;
 
         // Orographic and convective precipitation — LAND ONLY
-        if (c.isLand) {
+        if (P.isLand[c]) {
           const xp = wrapX(x + 1), xm = wrapX(x - 1);
-          const gradX = (state.cells[y * W + xp].elevation - state.cells[y * W + xm].elevation) / 2;
-          const gradY = (state.cells[(y + 1) * W + x].elevation - state.cells[(y - 1) * W + x].elevation) / 2;
+          const gradX = (P.elevation[y * W + xp] - P.elevation[y * W + xm]) / 2;
+          const gradY = (P.elevation[(y + 1) * W + x] - P.elevation[(y - 1) * W + x]) / 2;
 
-          const uplift = c.windU * gradX + c.windV * gradY;
+          const uplift = P.windU[c] * gradX + P.windV[c] * gradY;
           if (uplift > 0) {
             const effectiveOroFactor = state.params.oroFactor / state.params.atmosphericPressure;
             oroPrecip = moisture[ci] * uplift * effectiveOroFactor;
           }
 
-          const divU = (state.cells[y * W + xp].windU - state.cells[y * W + xm].windU) / 2;
-          const divV = (state.cells[(y + 1) * W + x].windV - state.cells[(y - 1) * W + x].windV) / 2;
+          const divU = (P.windU[y * W + xp] - P.windU[y * W + xm]) / 2;
+          const divV = (P.windV[(y + 1) * W + x] - P.windV[(y - 1) * W + x]) / 2;
           const div = divU + divV;
           if (div < 0) {
             const effectiveConvFactor = state.params.convFactor / state.params.atmosphericPressure;
@@ -401,7 +402,7 @@ async function step4_computeAtmosphere(seed, rng) {
         moisture[ci] -= totalPrecip;
 
         // Only accumulate precipitation stats on land (we care about land rainfall for flora)
-        if (c.isLand) {
+        if (P.isLand[c]) {
           precipAccum[ci] += totalPrecip;
         }
       }
@@ -420,15 +421,15 @@ async function step4_computeAtmosphere(seed, rng) {
     }
 
     for (let i = 0; i < TOTAL; i++) {
-      if (state.cells[i].isLand && precipAccum[i] > 0) {
+      if (P.isLand[i] && precipAccum[i] > 0) {
         moisture[i] += precipAccum[i] * 0.02 * state.params.atmosphericPressure;
       }
     }
   }
 
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].isLand) {
-      const elevProxy = 1.0 - Math.min(state.cells[i].elevation * 5, 1);
+    if (P.isLand[i]) {
+      const elevProxy = 1.0 - Math.min(P.elevation[i] * 5, 1);
       const minMoisture = elevProxy * 0.15 * state.params.atmosphericPressure;
       if (moisture[i] < minMoisture) moisture[i] = minMoisture;
     }
@@ -437,7 +438,7 @@ async function step4_computeAtmosphere(seed, rng) {
   // Collect all nonzero land precipitation values
   const landPrecipValues = [];
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].isLand && precipAccum[i] > 0) {
+    if (P.isLand[i] && precipAccum[i] > 0) {
       landPrecipValues.push(precipAccum[i]);
     }
   }
@@ -454,14 +455,12 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   for (let i = 0; i < TOTAL; i++) {
-    state.cells[i].precipitation = state.cells[i].isLand
+    P.precipitation[i] = P.isLand[i]
       ? clamp(precipAccum[i] / precipScale, 0, 1)
       : 0;
-    state.cells[i].atmosphericMoisture = clamp(
+    P.atmosphericMoisture[i] = clamp(
       moisture[i] / (precipScale * 0.5 + 0.001), 0, 1
     );
-    state.cells[i].moisture = state.cells[i].precipitation;
-    state.cells[i].baseMoisture = state.cells[i].precipitation;
   }
 
   // ── Step 4d: Groundwater ──
@@ -469,21 +468,21 @@ async function step4_computeAtmosphere(seed, rng) {
   await new Promise(r => setTimeout(r, 0));
 
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    if (!c.isLand) {
-      c.groundwater = 1.0;
+    const c = i;
+    if (!P.isLand[c]) {
+      P.groundwater[c] = 1.0;
       continue;
     }
 
-    const coastalBase = c.elevation < state.params.coastalThreshold
-        ? (1.0 - c.elevation / state.params.coastalThreshold) * state.params.coastalGroundwater
+    const coastalBase = P.elevation[c] < state.params.coastalThreshold
+        ? (1.0 - P.elevation[c] / state.params.coastalThreshold) * state.params.coastalGroundwater
         : 0;
 
-    const recharge = c.precipitation * state.params.groundwaterRecharge;
-    const geothermal = c.volcanism * state.params.groundwaterGeothermal;
-    const depthPenalty = Math.max(0, c.elevation - 0.05) * state.params.groundwaterDepthFactor;
+    const recharge = P.precipitation[c] * state.params.groundwaterRecharge;
+    const geothermal = P.volcanism[c] * state.params.groundwaterGeothermal;
+    const depthPenalty = Math.max(0, P.elevation[c] - 0.05) * state.params.groundwaterDepthFactor;
 
-    c.groundwater = clamp(coastalBase + recharge + geothermal - depthPenalty, 0, 1);
+    P.groundwater[c] = clamp(coastalBase + recharge + geothermal - depthPenalty, 0, 1);
   }
 
   // ── Step 4e: Drainage Accumulation ──
@@ -492,18 +491,18 @@ async function step4_computeAtmosphere(seed, rng) {
 
   const landIndices = [];
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].isLand) landIndices.push(i);
+    if (P.isLand[i]) landIndices.push(i);
   }
-  landIndices.sort((a, b) => state.cells[b].elevation - state.cells[a].elevation);
+  landIndices.sort((a, b) => P.elevation[b] - P.elevation[a]);
 
   const flowAccum = new Float32Array(TOTAL);
   for (let i = 0; i < TOTAL; i++) {
-    flowAccum[i] = state.cells[i].isLand ? state.cells[i].precipitation : 0;
+    flowAccum[i] = P.isLand[i] ? P.precipitation[i] : 0;
   }
   for (const ci of landIndices) {
     const cx = ci % W;
     const cy = (ci / W) | 0;
-    const elev = state.cells[ci].elevation;
+    const elev = P.elevation[ci];
 
     let lowestIdx = -1, lowestElev = elev;
     for (let d = 0; d < 8; d++) {
@@ -511,8 +510,8 @@ async function step4_computeAtmosphere(seed, rng) {
       const ny = cy + dy8[d];
       if (ny < 0 || ny >= H) continue;
       const ni = ny * W + nx;
-      if (state.cells[ni].elevation < lowestElev) {
-        lowestElev = state.cells[ni].elevation;
+      if (P.elevation[ni] < lowestElev) {
+        lowestElev = P.elevation[ni];
         lowestIdx = ni;
       }
     }
@@ -522,37 +521,36 @@ async function step4_computeAtmosphere(seed, rng) {
   }
 
   for (let i = 0; i < TOTAL; i++) {
-    state.cells[i].drainage = state.cells[i].isLand ?
+    P.drainage[i] = P.isLand[i] ?
       clamp(Math.log(1 + flowAccum[i]) * state.params.hydDrainageScale, 0, state.params.hydDrainageCap) : 0;
   }
 
   // ── Step 4f: Water Availability ──
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    if (c.isLand) {
-      c.waterAvailability = clamp(
-          c.precipitation * 0.7 + c.groundwater * 0.3 + c.drainage,
+    const c = i;
+    if (P.isLand[c]) {
+      P.waterAvailability[c] = clamp(
+          P.precipitation[c] * 0.7 + P.groundwater[c] * 0.3 + P.drainage[c],
           0, 1
       );
-      const elevPenalty = Math.max(0, c.elevation - 0.05) * 3.0;
+      const elevPenalty = Math.max(0, P.elevation[c] - 0.05) * 3.0;
       const minWater = Math.max(0, 0.15 - elevPenalty) * state.params.atmosphericPressure;
-      c.waterAvailability = Math.max(c.waterAvailability, minWater);
+      P.waterAvailability[c] = Math.max(P.waterAvailability[c], minWater);
     } else {
-      c.waterAvailability = 1.0;
+      P.waterAvailability[c] = 1.0;
     }
-    c.moisture = c.waterAvailability;
   }
 
   // Temperature
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const ci = y * W + x;
-      const c = state.cells[ci];
+      const c = ci;
       const latFrac = Math.abs(y - 128) / 128;
       const baseTemp = 1.0 - latFrac * 0.4;
-      const elevCooling = Math.max(0, c.elevation) * 0.3;
-      c.temperature = clamp(baseTemp - elevCooling, 0.4, 1.0);
-      c.isFreezing = c.temperature < 0.5;
+      const elevCooling = Math.max(0, P.elevation[c]) * 0.3;
+      P.temperature[c] = clamp(baseTemp - elevCooling, 0.4, 1.0);
+      P.isFreezing[c] = P.temperature[c] < 0.5;
     }
   }
 }

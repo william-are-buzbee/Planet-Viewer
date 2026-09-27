@@ -430,7 +430,7 @@ function captureSnapshot() {
   }
   px = ((px % W) + W) % W;
   py = Math.max(0, Math.min(H - 1, py));
-  const pc = state.cells[py * W + px];
+  const pc = state.cells.cell(py * W + px);
   const pBand = getLatitudeBand(py);
   const pPlateType = pc.plateType || '—';
   const windDir = Math.round(Math.atan2(pc.windV || 0, pc.windU || 0) * 180 / Math.PI);

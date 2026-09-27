@@ -3,10 +3,11 @@
 // ══════════════════════════════════════════════════════════════════
 
 import { state } from './state.js';
+import { PLATE_CONTINENTAL, PLATE_OCEANIC, BT_NONE, BT_COLLISION, BT_SUBDUCTION, BT_RIFT, BT_SPREADING, BT_TRANSFORM } from './planet-grid.js';
 import {
   W, H, TOTAL,
   spherePos, CELL_TO_3D, dist3D, clamp, wrapX,
-  sphereNoise, driftTo3D, wrappedDistSq, maxKey
+  sphereNoise, driftTo3D, wrappedDistSq
 } from './core-math.js';
 
 // ── 8-neighbour offsets for erosion transport (same order as the old inline list) ──
@@ -66,6 +67,7 @@ function shuffleArray(arr, rng) {
 
 // ── Step 1: Plates ──
 function step1_generatePlates(seed, rng) {
+  const P = state.cells;
   const N = state.params.plateCountBase + (seed % state.params.plateCountRange);
 
   // 1a. Place centers
@@ -116,12 +118,12 @@ function step1_generatePlates(seed, rng) {
           secondNearest = { id: p, dist: d };
         }
       }
-      const c = state.cells[y * W + x];
-      c.plateId = nearest.id;
-      c.plateType = state.plates[nearest.id].type;
-      c.nearestDist = nearest.dist;
-      c.secondPlateId = secondNearest.id;
-      c.secondDist = secondNearest.dist;
+      const c = y * W + x;
+      P.plateId[c] = nearest.id;
+      P.plateType[c] = state.plates[nearest.id].type === 'continental' ? PLATE_CONTINENTAL : PLATE_OCEANIC;
+      P.nearestDist[c] = nearest.dist;
+      P.secondPlateId[c] = secondNearest.id;
+      P.secondDist[c] = secondNearest.dist;
     }
   }
 
@@ -132,21 +134,21 @@ function step1_generatePlates(seed, rng) {
   // First pass: identify boundary cells and their types
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const c = state.cells[y * W + x];
-      const plateA = state.plates[c.plateId];
+      const c = y * W + x;
+      const plateA = state.plates[P.plateId[c]];
       let bestConvergence = 0;
-      let bestType = null;
+      let bestType = BT_NONE;
       let isBoundary = false;
 
       for (let d = 0; d < 4; d++) {
         const nx = wrapX(x + dx4[d]);
         const ny = y + dy4[d];
         if (ny < 0 || ny >= H) continue;
-        const neighbor = state.cells[ny * W + nx];
-        if (neighbor.plateId === c.plateId) continue;
+        const neighbor = ny * W + nx;
+        if (P.plateId[neighbor] === P.plateId[c]) continue;
 
         isBoundary = true;
-        const plateB = state.plates[neighbor.plateId];
+        const plateB = state.plates[P.plateId[neighbor]];
 
         // Boundary normal — use 3D vectors on the sphere
         const pA3 = spherePos[plateA.center.x][plateA.center.y];
@@ -166,26 +168,26 @@ function step1_generatePlates(seed, rng) {
 
           if (convergence > 0.8) {
             if (plateA.type === 'continental' && plateB.type === 'continental') {
-              bestType = 'collision';
+              bestType = BT_COLLISION;
             } else {
-              bestType = 'subduction';
+              bestType = BT_SUBDUCTION;
             }
           } else if (convergence < -0.8) {
             if (plateA.type === 'continental' && plateB.type === 'continental') {
-              bestType = 'rift';
+              bestType = BT_RIFT;
             } else {
-              bestType = 'spreading';
+              bestType = BT_SPREADING;
             }
           } else {
-            bestType = 'transform';
+            bestType = BT_TRANSFORM;
           }
         }
       }
 
       if (isBoundary) {
-        c.boundaryType = bestType;
-        c.boundaryStrength = clamp(Math.abs(bestConvergence) / 3.0, 0, 1);
-        c.boundaryDistance = 0;
+        P.boundaryType[c] = bestType;
+        P.boundaryStrength[c] = clamp(Math.abs(bestConvergence) / 3.0, 0, 1);
+        P.boundaryDistance[c] = 0;
       }
     }
   }
@@ -194,7 +196,7 @@ function step1_generatePlates(seed, rng) {
   const queue = [];
   const visited = new Uint8Array(TOTAL);
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].boundaryDistance === 0) {
+    if (P.boundaryDistance[i] === 0) {
       queue.push(i);
       visited[i] = 1;
     }
@@ -205,7 +207,7 @@ function step1_generatePlates(seed, rng) {
     const ci = queue[head++];
     const cx = ci % W;
     const cy = (ci / W) | 0;
-    const cell = state.cells[ci];
+    const cell = ci;
 
     for (let d = 0; d < 4; d++) {
       const nx = wrapX(cx + dx4[d]);
@@ -214,14 +216,14 @@ function step1_generatePlates(seed, rng) {
       const ni = ny * W + nx;
       if (visited[ni]) continue;
 
-      const newDist = cell.boundaryDistance + 1;
+      const newDist = P.boundaryDistance[cell] + 1;
       if (newDist > 15) continue; // only propagate up to distance 15
 
       visited[ni] = 1;
-      const neighbor = state.cells[ni];
-      neighbor.boundaryDistance = newDist;
-      neighbor.boundaryType = cell.boundaryType;
-      neighbor.boundaryStrength = cell.boundaryStrength;
+      const neighbor = ni;
+      P.boundaryDistance[neighbor] = newDist;
+      P.boundaryType[neighbor] = P.boundaryType[cell];
+      P.boundaryStrength[neighbor] = P.boundaryStrength[cell];
       queue.push(ni);
     }
   }
@@ -245,12 +247,17 @@ function step1b_generateGeoSeeds(seed, rng) {
   const subductionCells = [];
   const riftCells = [];
 
+  const P = state.cells;
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    if (c.boundaryDistance !== 0) continue;
-    if (c.boundaryType === 'collision') collisionCells.push(c);
-    else if (c.boundaryType === 'subduction') subductionCells.push(c);
-    else if (c.boundaryType === 'rift') riftCells.push(c);
+    if (P.boundaryDistance[i] !== 0) continue;
+    const bt = P.boundaryType[i];
+    if (bt !== BT_COLLISION && bt !== BT_SUBDUCTION && bt !== BT_RIFT) continue;
+    // a small record per boundary cell (a few thousand) — the seed placement
+    // below works on these, not on the grid
+    const bc = { x: i % W, y: (i / W) | 0, plateId: P.plateId[i], secondPlateId: P.secondPlateId[i], boundaryStrength: P.boundaryStrength[i] };
+    if (bt === BT_COLLISION) collisionCells.push(bc);
+    else if (bt === BT_SUBDUCTION) subductionCells.push(bc);
+    else riftCells.push(bc);
   }
 
   const mountainSeeds = [];
@@ -525,6 +532,7 @@ function computeEffectiveDist(pos, seedObj) {
 }
 
 function step2_computeElevation(seed, rng) {
+  const P = state.cells;
   // Expand search radii by aspect ratio so elongated seeds are found
   const MAX_MTN_RADIUS = 0.25 * state.params.peakAspectRatio;   // 3D units, expanded for elongation
   const MAX_ARC_RADIUS = 0.18 * state.params.peakAspectRatio;   // 3D units, expanded for elongation
@@ -533,27 +541,26 @@ function step2_computeElevation(seed, rng) {
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const c = state.cells[y * W + x];
+      const c = y * W + x;
       const pos = spherePos[x][y];
 
       const noise1 = sphereNoise(pos, seed + 500, 2, 0.015);
 
       // Base elevation — blended near plate boundaries for smooth continental shelves
-      const plate1 = state.plates[c.plateId];
-      const plate2 = state.plates[c.secondPlateId];
+      const plate1 = state.plates[P.plateId[c]];
+      const plate2 = state.plates[P.secondPlateId[c]];
       const noiseAmp = state.params.continentalNoise;
       const baseElev1 = (plate1.type === 'continental' ? state.params.continentalBase : state.params.oceanicBase) + noise1 * noiseAmp;
       const baseElev2 = (plate2.type === 'continental' ? state.params.continentalBase : state.params.oceanicBase) + noise1 * noiseAmp;
 
-      const edgeRatio = (c.secondDist - c.nearestDist) / (c.secondDist + c.nearestDist);
+      const edgeRatio = (P.secondDist[c] - P.nearestDist[c]) / (P.secondDist[c] + P.nearestDist[c]);
       const blendSteepness = 120 / state.params.blendWidth;
       const blend = 1 / (1 + Math.exp(-edgeRatio * blendSteepness));
 
       let elevation = baseElev2 + (baseElev1 - baseElev2) * blend;
 
-      c.blend = blend;
+      P.blend[c] = blend;
       const proximity = 1 - blend;  // 0.5 at boundary, ~0 deep inside
-      c.proximity = proximity;
 
       if (proximity > 0.01) {
         const pA3 = spherePos[plate1.center.x][plate1.center.y];
@@ -564,9 +571,9 @@ function step2_computeElevation(seed, rng) {
         const dB3 = driftTo3D(plate2.center.x, plate2.center.y, plate2.drift.angle, plate2.drift.speed);
         const driftA = (dA3.x * bnx3 + dA3.y * bny3 + dA3.z * bnz3) / bnLen;
         const driftB = (dB3.x * bnx3 + dB3.y * bny3 + dB3.z * bnz3) / bnLen;
-        c.convergence = (driftA - driftB) / 3;
+        P.convergence[c] = (driftA - driftB) / 3;
       } else {
-        c.convergence = 0;
+        P.convergence[c] = 0;
       }
 
       // Mountain seeds (collision zones) — elliptical + angular noise falloff
@@ -618,16 +625,17 @@ function step2_computeElevation(seed, rng) {
       // Fractal noise — no suppression needed with off-axis noise sampling
       elevation += sphereNoise(pos, seed, state.params.fractalOctaves, state.params.fractalScale) * state.params.fractalAmp;
 
-      c.elevation = elevation;
-      c.isLand = elevation > 0.0;
-      c.isShallowWater = elevation > -0.08 && elevation <= 0.0;
-      c.isDeepWater = elevation <= -0.08;
+      P.elevation[c] = elevation;
+      P.isLand[c] = elevation > 0.0;
+      P.isShallowWater[c] = elevation > -0.08 && elevation <= 0.0;
+      P.isDeepWater[c] = elevation <= -0.08;
     }
   }
 }
 
 // ── Step 3: Minerals ──
 function step3_computeMinerals(seed, rng) {
+  const P = state.cells;
   const MAX_MTN_RADIUS = 0.25;   // 3D units
   const MAX_ARC_RADIUS = 0.18;   // 3D units
   const HOTSPOT_VOLC_RADIUS = 0.15;  // 3D units (~12 cells at equator)
@@ -635,22 +643,22 @@ function step3_computeMinerals(seed, rng) {
 
   // 3a. Base chemistry — blend between nearest and second-nearest plate
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    const plate1 = state.plates[c.plateId];
-    const plate2 = state.plates[c.secondPlateId];
-    const b = c.blend; // 0.5 at boundary, ~1.0 deep inside plate1
+    const c = i;
+    const plate1 = state.plates[P.plateId[c]];
+    const plate2 = state.plates[P.secondPlateId[c]];
+    const b = P.blend[c]; // 0.5 at boundary, ~1.0 deep inside plate1
 
-    c.minerals.iron = (plate1.baseRock.iron * b + plate2.baseRock.iron * (1 - b)) * 0.3;
-    c.minerals.copper = (plate1.baseRock.copper * b + plate2.baseRock.copper * (1 - b)) * 0.3;
-    c.minerals.manganese = (plate1.baseRock.manganese * b + plate2.baseRock.manganese * (1 - b)) * 0.3;
+    P.iron[c] = (plate1.baseRock.iron * b + plate2.baseRock.iron * (1 - b)) * 0.3;
+    P.copper[c] = (plate1.baseRock.copper * b + plate2.baseRock.copper * (1 - b)) * 0.3;
+    P.manganese[c] = (plate1.baseRock.manganese * b + plate2.baseRock.manganese * (1 - b)) * 0.3;
   }
 
   // 3b. Volcanic concentration — use seed points, not proximity trace
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
+    const c = i;
     let volcanism = 0;
 
-    const nearbyMtns = queryNearbySeeds(state.geoSeeds.mountainGrid, c.x, c.y, MAX_MTN_RADIUS);
+    const nearbyMtns = queryNearbySeeds(state.geoSeeds.mountainGrid, (c % W), ((c / W) | 0), MAX_MTN_RADIUS);
     for (const { seed: mtn, dist } of nearbyMtns) {
       const r = mtn.radius;
       if (dist < r) {
@@ -659,7 +667,7 @@ function step3_computeMinerals(seed, rng) {
       }
     }
 
-    const nearbyArcs = queryNearbySeeds(state.geoSeeds.arcGrid, c.x, c.y, MAX_ARC_RADIUS);
+    const nearbyArcs = queryNearbySeeds(state.geoSeeds.arcGrid, (c % W), ((c / W) | 0), MAX_ARC_RADIUS);
     for (const { seed: arc, dist } of nearbyArcs) {
       const r = arc.radius;
       if (dist < r) {
@@ -669,24 +677,24 @@ function step3_computeMinerals(seed, rng) {
     }
 
     for (const hs of state.hotspots) {
-      const hsDist = dist3D(spherePos[c.x][c.y], spherePos[hs.x][hs.y]);
+      const hsDist = dist3D(spherePos[(c % W)][((c / W) | 0)], spherePos[hs.x][hs.y]);
       if (hsDist < HOTSPOT_VOLC_RADIUS) volcanism += hs.intensity * Math.max(0, 1 - hsDist / HOTSPOT_VOLC_RADIUS);
     }
 
     volcanism = clamp(volcanism, 0, 1.0);
-    c.volcanism = volcanism;
+    P.volcanism[c] = volcanism;
 
-    c.minerals.iron += volcanism * 0.55;
-    c.minerals.copper += volcanism * 0.35;
-    c.minerals.manganese += volcanism * 0.3;
+    P.iron[c] += volcanism * 0.55;
+    P.copper[c] += volcanism * 0.35;
+    P.manganese[c] += volcanism * 0.3;
 
     for (const hs of state.hotspots) {
-      const hsDist = dist3D(spherePos[c.x][c.y], spherePos[hs.x][hs.y]);
+      const hsDist = dist3D(spherePos[(c % W)][((c / W) | 0)], spherePos[hs.x][hs.y]);
       if (hsDist < HOTSPOT_CENTER_RADIUS) {
         const centerBoost = (1 - hsDist / HOTSPOT_CENTER_RADIUS) * 0.4;
-        c.minerals.iron      = Math.max(c.minerals.iron, centerBoost * hs.intensity);
-        c.minerals.manganese = Math.max(c.minerals.manganese, centerBoost * hs.intensity * 0.8);
-        c.minerals.copper    = Math.max(c.minerals.copper, centerBoost * hs.intensity * 0.5);
+        P.iron[c]      = Math.max(P.iron[c], centerBoost * hs.intensity);
+        P.manganese[c] = Math.max(P.manganese[c], centerBoost * hs.intensity * 0.8);
+        P.copper[c]    = Math.max(P.copper[c], centerBoost * hs.intensity * 0.5);
       }
     }
   }
@@ -697,9 +705,9 @@ function step3_computeMinerals(seed, rng) {
     const snapCopper = new Float32Array(TOTAL);
     const snapManganese = new Float32Array(TOTAL);
     for (let i = 0; i < TOTAL; i++) {
-      snapIron[i] = state.cells[i].minerals.iron;
-      snapCopper[i] = state.cells[i].minerals.copper;
-      snapManganese[i] = state.cells[i].minerals.manganese;
+      snapIron[i] = P.iron[i];
+      snapCopper[i] = P.copper[i];
+      snapManganese[i] = P.manganese[i];
     }
 
     // Scratch buffers for the (at most 8) lower neighbours of a cell — reused
@@ -710,15 +718,15 @@ function step3_computeMinerals(seed, rng) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const ci = y * W + x;
-        const c = state.cells[ci];
-        const elev = c.elevation;
+        const c = ci;
+        const elev = P.elevation[c];
 
         let totalDiff = 0, lowerCount = 0;
         for (let d = 0; d < 8; d++) {
           const ny = y + EDY8[d];
           if (ny < 0 || ny >= H) continue;
           const ni = ny * W + wrapX(x + EDX8[d]);
-          const nElev = state.cells[ni].elevation;
+          const nElev = P.elevation[ni];
           if (nElev < elev) {
             const diff = elev - nElev;
             lowerIdx[lowerCount] = ni;
@@ -732,14 +740,14 @@ function step3_computeMinerals(seed, rng) {
           const transferRate = state.params.erosionRate;
           for (let k = 0; k < lowerCount; k++) {
             const fraction = (lowerDiff[k] / totalDiff) * transferRate;
-            const tgt = state.cells[lowerIdx[k]].minerals;
-            tgt.iron      += snapIron[ci] * fraction;
-            tgt.copper    += snapCopper[ci] * fraction;
-            tgt.manganese += snapManganese[ci] * fraction;
+            const tgt = lowerIdx[k];
+            P.iron[tgt]      += snapIron[ci] * fraction;
+            P.copper[tgt]    += snapCopper[ci] * fraction;
+            P.manganese[tgt] += snapManganese[ci] * fraction;
           }
-          c.minerals.iron      -= snapIron[ci] * transferRate;
-          c.minerals.copper    -= snapCopper[ci] * transferRate;
-          c.minerals.manganese -= snapManganese[ci] * transferRate;
+          P.iron[c]      -= snapIron[ci] * transferRate;
+          P.copper[c]    -= snapCopper[ci] * transferRate;
+          P.manganese[c] -= snapManganese[ci] * transferRate;
         }
       }
     }
@@ -747,23 +755,22 @@ function step3_computeMinerals(seed, rng) {
 
   // 3d. Marine sedimentation
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].isDeepWater) state.cells[i].minerals.manganese += 0.08;
+    if (P.isDeepWater[i]) P.manganese[i] += 0.08;
   }
 
   // 3e. Clamp and totals
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    c.minerals.iron = clamp(c.minerals.iron, 0, 1);
-    c.minerals.copper = clamp(c.minerals.copper, 0, 1);
-    c.minerals.manganese = clamp(c.minerals.manganese, 0, 1);
-    c.mineralTotal = c.minerals.iron + c.minerals.copper + c.minerals.manganese;
-    c.isDepleted = c.mineralTotal < 0.15;
-    c.dominant = maxKey(c.minerals);
+    const c = i;
+    P.iron[c] = clamp(P.iron[c], 0, 1);
+    P.copper[c] = clamp(P.copper[c], 0, 1);
+    P.manganese[c] = clamp(P.manganese[c], 0, 1);
+    P.mineralTotal[c] = P.iron[c] + P.copper[c] + P.manganese[c];
   }
 }
 
 // ── Step 2b: Coastal Bathymetry Steepening ──
 function step2b_coastalBathymetry() {
+  const P = state.cells;
   const coastDist = new Int16Array(TOTAL).fill(-1);
   const coastalHeight = new Float32Array(TOTAL);
   const oceanicBase = state.params.oceanicBase;
@@ -776,7 +783,7 @@ function step2b_coastalBathymetry() {
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
-      if (state.cells[i].elevation <= 0) continue; // not land
+      if (P.elevation[i] <= 0) continue; // not land
 
       // Check all 8 neighbors
       for (let dy = -1; dy <= 1; dy++) {
@@ -786,14 +793,14 @@ function step2b_coastalBathymetry() {
           if (ny < 0 || ny >= H) continue;
           const nx = wrapX(x + dx);
           const ni = ny * W + nx;
-          if (state.cells[ni].elevation > 0) continue; // also land
+          if (P.elevation[ni] > 0) continue; // also land
           if (coastDist[ni] >= 0) {
             // Already queued — take max coastalHeight
-            coastalHeight[ni] = Math.max(coastalHeight[ni], state.cells[i].elevation);
+            coastalHeight[ni] = Math.max(coastalHeight[ni], P.elevation[i]);
             continue;
           }
           coastDist[ni] = 0;
-          coastalHeight[ni] = state.cells[i].elevation;
+          coastalHeight[ni] = P.elevation[i];
           queue.push(ni);
         }
       }
@@ -817,7 +824,7 @@ function step2b_coastalBathymetry() {
         const nx = wrapX(cx + dx);
         const ni = ny * W + nx;
         if (coastDist[ni] >= 0) continue; // already visited
-        if (state.cells[ni].elevation > 0) continue; // land
+        if (P.elevation[ni] > 0) continue; // land
         coastDist[ni] = nextDist;
         coastalHeight[ni] = ch;
         queue.push(ni);
@@ -831,8 +838,8 @@ function step2b_coastalBathymetry() {
   let minDist = Infinity, maxDist = -Infinity, sumDist = 0, distCount = 0;
 
   for (let i = 0; i < TOTAL; i++) {
-    const c = state.cells[i];
-    if (c.elevation > 0) continue; // land
+    const c = i;
+    if (P.elevation[c] > 0) continue; // land
     if (coastDist[i] < 0) continue; // unreached by BFS
 
     // Stats
@@ -846,14 +853,14 @@ function step2b_coastalBathymetry() {
     let depthFloor = (-0.05 - d * 0.08) * slopeMod;
     depthFloor = Math.max(depthFloor, oceanicBase); // don't go below ocean floor
 
-    if (c.elevation > depthFloor) {
-      const wasShallow = c.isShallowWater;
-      c.elevation = depthFloor;
-      c.isLand = false;
-      c.isShallowWater = c.elevation > -0.08 && c.elevation <= 0.0;
-      c.isDeepWater = c.elevation <= -0.08;
+    if (P.elevation[c] > depthFloor) {
+      const wasShallow = P.isShallowWater[c];
+      P.elevation[c] = depthFloor;
+      P.isLand[c] = false;
+      P.isShallowWater[c] = P.elevation[c] > -0.08 && P.elevation[c] <= 0.0;
+      P.isDeepWater[c] = P.elevation[c] <= -0.08;
       modified++;
-      if (wasShallow && c.isDeepWater) shallowToDeep++;
+      if (wasShallow && P.isDeepWater[c]) shallowToDeep++;
     }
   }
 
