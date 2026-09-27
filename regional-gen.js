@@ -56,6 +56,23 @@ export function getPlanetMaxLandElev() {
 // Same, in metres — the regional and tile layers work in metres (units.js).
 export function getPlanetMaxLandElevM() { return getPlanetMaxLandElev() * ELEV_UNIT_M; }
 
+// ── Hi-res flow in km²·precip: one hi-res cell's area, and the planet's
+//    biggest river (cached per generation). Stream order at every layer is
+//    normalised against this so orders agree between windows and zooms.
+export function hiResCellAreaKm2() {
+  const km = PLANETARY_CELL_KM / state.hiResMultiplier;
+  return km * km;
+}
+let _planetMaxFlowKm2 = null;
+export function getPlanetMaxFlowKm2() {
+  if (_planetMaxFlowKm2 !== null) return _planetMaxFlowKm2;
+  const fa = state.hiResData.flowAccum;
+  let m = 0;
+  for (let i = 0; i < fa.length; i++) if (fa[i] > m) m = fa[i];
+  _planetMaxFlowKm2 = Math.max(1, m * hiResCellAreaKm2());
+  return _planetMaxFlowKm2;
+}
+
 // ── Zone classification from elevation (metres) + slope ──
 const TIDAL_DEPTH_M = 5;   // water shallower than this is the tidal zone
 
@@ -81,6 +98,7 @@ function classifyZone(elevation, slopeMag, maxLandElev) {
 function generateRegionalDetail(centerX, centerY) {
   const _t0 = performance.now();
   _planetMaxLandElev = null; // recompute per generation
+  _planetMaxFlowKm2 = null;
   const maxLand = getPlanetMaxLandElevM();   // metres
 
   const seed = state.seed | 0;
@@ -522,16 +540,75 @@ function generateRegionalDetail(centerX, centerY) {
   }
 
   const _t4 = performance.now();
-  // Pass 3: drainage (higher-resolution flow accumulation than the high-res grid)
-  computeRegionalDrainage(g);
-
-  // R2-FIX2: removed hi-res stream order inheritance (former Pass 3b).
-  // The regional D8 flow accumulation (computeRegionalDrainage) already
-  // computes stream order from the bilinear-interpolated + noise-enhanced
-  // elevation grid, which encodes the same drainage patterns the hi-res
-  // global computation detected. Inheriting the hi-res stream order via
-  // nearest-neighbour sampling produced 128×128 blocks of uniform stream order,
-  // causing discontinuous WTD/saturation/color steps at grid boundaries.
+  // Pass 3: drainage. Water entering the window from upstream is injected along
+  // the border from the hi-res flow field: for each land border cell, the hi-res
+  // drain direction's inward component times the hi-res flow there, spread over
+  // the regional cells that share that hi-res edge. The regional D8 then gathers
+  // it into the window's own channels, so a river arriving at one edge continues
+  // through the window and out the other side instead of starting from zero.
+  // ── Border crossings, chosen so adjacent windows agree by construction ──
+  // The hi-res flow field is sampled along each edge. For every hi-res cell the
+  // edge passes through (the field cannot resolve anything finer) there is at
+  // most ONE inflow crossing and ONE exit gap, both at the argmax of
+  // f·|dot| over that span (f = hi-res flow at the edge, dot = inward component
+  // of the hi-res drain direction). Inflow AMOUNTS are sampled half a hi-res
+  // cell OUTSIDE the window, so a window never counts its own accumulation as
+  // inflow. The neighbouring window samples the same field at the same edge
+  // positions and so picks the same crossing from the other side: a river that
+  // leaves one window enters the next at the same place. Everything else on the
+  // border is a wall; border cells that are sea may always drain.
+  const inflow = new Float32Array(NN);
+  const padSink = { W: new Uint8Array(S), E: new Uint8Array(S), N: new Uint8Array(S), S: new Uint8Array(S) };
+  {
+    const hrd = state.hiResData;
+    const areaHR = hiResCellAreaKm2();
+    const edgeLen = CELLS_PER_PLANETARY / state.hiResMultiplier;   // regional cells per hi-res edge
+    const GAP = 2;                                                  // crossing half-width in cells
+    const edge = (cellIdx, nxIn, nyIn, sinkArr) => {
+      // spans keyed by the hi-res cell along the edge
+      const spans = new Map();
+      for (let k = 0; k < S; k++) {
+        const idx = cellIdx(k);
+        if (!g.isLand[idx]) { sinkArr[k] = 1; }
+        const hx = _hx[idx], hy = _hy[idx];
+        const dxDrain = bilinearSampleHR(hrd.drainDirX, hx, hy, state.HR_W, state.HR_H);
+        const dyDrain = bilinearSampleHR(hrd.drainDirY, hx, hy, state.HR_W, state.HR_H);
+        const dot = dxDrain * nxIn + dyDrain * nyIn;
+        if (Math.abs(dot) <= 0.05) continue;
+        const fEdge = bilinearSampleHR(hrd.flowAccum, hx, hy, state.HR_W, state.HR_H);
+        const w = fEdge * Math.abs(dot);
+        const key = nxIn !== 0 ? Math.floor(hy) : Math.floor(hx);
+        let sp = spans.get(key);
+        if (!sp) { sp = { inTotal: 0, inBest: -1, inW: -1, outBest: -1, outW: -1 }; spans.set(key, sp); }
+        if (dot > 0) {
+          // amount from the cell just outside the window
+          const fOut = bilinearSampleHR(hrd.flowAccum, hx - nxIn * 0.5, hy - nyIn * 0.5, state.HR_W, state.HR_H) * areaHR;
+          sp.inTotal += fOut * dot / edgeLen;
+          if (w > sp.inW) { sp.inW = w; sp.inBest = k; }
+        } else if (w > sp.outW) { sp.outW = w; sp.outBest = k; }
+      }
+      for (const sp of spans.values()) {
+        if (sp.inTotal > 0 && sp.inBest >= 0) {
+          let n = 0;
+          for (let j = Math.max(0, sp.inBest - GAP); j <= Math.min(S - 1, sp.inBest + GAP); j++) if (g.isLand[cellIdx(j)]) n++;
+          if (n > 0) for (let j = Math.max(0, sp.inBest - GAP); j <= Math.min(S - 1, sp.inBest + GAP); j++) {
+            if (g.isLand[cellIdx(j)]) inflow[cellIdx(j)] += sp.inTotal / n;
+          }
+        }
+        if (sp.outBest >= 0) {
+          for (let j = Math.max(0, sp.outBest - GAP); j <= Math.min(S - 1, sp.outBest + GAP); j++) sinkArr[j] = 1;
+        }
+      }
+    };
+    edge(k => k * S,             1, 0, padSink.W);   // west edge: inward = +x
+    edge(k => k * S + (S - 1),  -1, 0, padSink.E);   // east edge
+    edge(k => k,                 0, 1, padSink.N);   // north edge: inward = +y
+    edge(k => (S - 1) * S + k,   0, -1, padSink.S);  // south edge
+  }
+  let inflowTotal = 0;
+  for (let i = 0; i < NN; i++) inflowTotal += inflow[i];
+  g.inflowTotalKm2 = inflowTotal;   // diagnostics / smoke test
+  computeRegionalDrainage(g, inflow, padSink, REGIONAL_CELL_KM * REGIONAL_CELL_KM, getPlanetMaxFlowKm2());
 
   const _t5 = performance.now();
   // Pass 4: refine substrate / saturation / water table from the high-res base.

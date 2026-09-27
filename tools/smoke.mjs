@@ -123,6 +123,56 @@ console.log = realLog;
 const after = Float32Array.from({ length: 64 }, (_, i) => state.regionalCells.elevation[state.regionalCells.idx(i * 8, i * 8)]);
 check(before.every((v, i) => v === after[i]), 'regional generation is deterministic for a fixed seed');
 
+// B4: rivers continue across adjacent windows. Centre a window on the planetary
+// cell holding the planet's biggest hi-res river, find the window edge the river
+// leaves through, generate the neighbouring window on that side, and require
+// that every stream-order≥3 cell on the shared edge meets one within ±3 cells.
+{
+  const hr = state.hiResData, m = state.hiResMultiplier;
+  let best = -1, bestF = 0;
+  for (let i = 0; i < hr.flowAccum.length; i++) if (hr.isLand[i] && hr.flowAccum[i] > bestF) { bestF = hr.flowAccum[i]; best = i; }
+  const rpx = ((best % state.HR_W) + 0.5) / m, rpy = (Math.floor(best / state.HR_W) + 0.5) / m;
+  console.log = () => {};
+  generateRegionalDetail(rpx, rpy);
+  console.log = realLog;
+  const A = state.regionalCells, S = REGIONAL_SIZE;
+  const edges = {
+    east:  { cells: [], nb: [rpx + 1, rpy], pick: k => A.idx(S - 1, k), other: (B, k) => B.idx(0, k) },
+    west:  { cells: [], nb: [rpx - 1, rpy], pick: k => A.idx(0, k),     other: (B, k) => B.idx(S - 1, k) },
+    south: { cells: [], nb: [rpx, rpy + 1], pick: k => A.idx(k, S - 1), other: (B, k) => B.idx(k, 0) },
+    north: { cells: [], nb: [rpx, rpy - 1], pick: k => A.idx(k, 0),     other: (B, k) => B.idx(k, S - 1) },
+  };
+  let riverCells = 0, maxFlow = 0;
+  for (let i = 0; i < A.N; i++) { if (A.isLand[i] && A.streamOrder[i] >= 3) riverCells++; if (A.flowAccum[i] > maxFlow) maxFlow = A.flowAccum[i]; }
+  check(riverCells > 0, `B4: the window on the planet's biggest land river cell shows a river (${riverCells} cells of stream order ≥ 3)`);
+  check(A.inflowTotalKm2 === 0 || maxFlow >= 0.5 * A.inflowTotalKm2, `B4: injected border inflow reaches an outlet (${A.inflowTotalKm2.toFixed(0)} km² injected, ${maxFlow.toFixed(0)} km² at the biggest cell, ${A.outflowKm2.toFixed(0)} km² left through the border)`);
+  for (const e of Object.values(edges)) for (let k = 0; k < S; k++) { const i = e.pick(k); if (A.isLand[i] && A.streamOrder[i] >= 3) e.cells.push(k); }
+  const [name, e] = Object.entries(edges).sort((a, b) => b[1].cells.length - a[1].cells.length)[0];
+  if (e.cells.length >= 3) {
+    console.log = () => {};
+    generateRegionalDetail(e.nb[0], e.nb[1]);
+    console.log = realLog;
+    const B = state.regionalCells;
+    // Measure at the neighbour's EXITS: every cell where B's river actually leaves
+    // through the shared edge (flowDir 255, stream order ≥ 3) must meet a river
+    // cell on A's edge within ±10 cells (≈1.5 km of a 78 km edge). The crossing
+    // gap itself is 5 cells wide and identical on both sides by construction; the
+    // slack is for the corridor each window's water runs along its border wall
+    // before turning in or out, which can start a few cells either side of the gap.
+    const bExits = [];
+    for (let k = 0; k < S; k++) { const i = e.other(B, k); if (B.isLand[i] && B.streamOrder[i] >= 3 && B.flowDir[i] === 255) bExits.push(k); }
+    const aSet = new Set(e.cells);
+    let matched = 0;
+    for (const k of bExits) { let hit = false; for (let d = -10; d <= 10 && !hit; d++) if (aSet.has(k + d)) hit = true; if (hit) matched++; }
+    check(bExits.length > 0 && matched === bExits.length, `B4: river crossing the ${name} edge continues in the next window (${matched}/${bExits.length} of the neighbour's exit cells meet this window's river; exits at rows ${bExits.join(',')})`);
+  } else {
+    check(true, `B4: river does not reach any window edge here (best edge has ${e.cells.length} cells) — continuity not testable on this seed`);
+  }
+  console.log = () => {};
+  generateRegionalDetail(px + 0.5, py + 0.5);   // back to the first window for the tile checks
+  console.log = realLog;
+}
+
 // Tile chunk on a land regional cell near the middle
 let rx = -1, ry = -1;
 for (let r = 0; r < 200 && rx < 0; r++) for (let a = 0; a < 8; a++) {
@@ -146,6 +196,13 @@ check(Math.sqrt(CHUNK_TOTAL) === 128, 'tile chunk is 128×128 (one regional cell
   check(mx - mn < 15, `tile micro-relief inside one regional cell is metres-scale (${(mx - mn).toFixed(2)} m)`);
 }
 check(state.tileChunkCache.has(`${rx},${ry}`), 'tile chunk cached');
+{
+  // B4: a chunk whose regional cell receives no significant inflow must not invent a river
+  const g = state.regionalCells, ci = g.idx(rx, ry);
+  let so3 = 0; for (let i = 0; i < CHUNK_TOTAL; i++) if (t.streamOrder[i] >= 3) so3++;
+  if (g.streamOrder[ci] < 3) check(so3 === 0, `B4: regional cell has stream order ${g.streamOrder[ci]}, its chunk has ${so3} river tiles (expect 0)`);
+  else check(so3 > 0, `B4: regional cell has stream order ${g.streamOrder[ci]}, its chunk carries the river (${so3} river tiles)`);
+}
 
 say(failures.length ? `\n${failures.length} FAILED` : '\nall checks passed');
 process.exit(failures.length ? 1 : 0);

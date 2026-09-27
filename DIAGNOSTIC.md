@@ -40,7 +40,7 @@ main.js            state object (single shared mutable store) + runGeneration()
  ├─ hires-gen.js          steps HR1–HR8 on state.hiResData (typed arrays, struct-of-arrays)
  ├─ planet-render.js      flat / globe / Mollweide renderers, streamlines, selection marker
  ├─ regional-gen.js       regional pipeline (two copies: HiRes path + dead LowRes path)
- │   ├─ regional-drainage.js  D8 flow accumulation + stream order (window-local)
+ │   ├─ regional-drainage.js  routeFlow (padded priority-flood + D8), km²·precip flow, planet-wide stream order
  │   ├─ regional-substrate.js grain / saturation / water-table refinement
  │   └─ regional-flora.js     flora refinement, confidence, WTD-derived water
  ├─ regional-render.js    regional + tile canvases and overlay tables
@@ -463,6 +463,55 @@ The last row moved because regional fields are now `float32`; the tile layer's b
 looks for strict local minima on an almost flat bilinear surface and flips on last-bit
 differences. That fragility is the tile hydrology B4 already owns, not a regression in the
 regional layer, whose outputs are unchanged to four decimals.
+
+## 10. B4 — applied (drainage that crosses regions and reaches the tiles)
+
+Flow is now one quantity at every layer: **upstream area in km² weighted by precipitation**, with
+a 0.05 runoff floor. Stream order is `log(1+f) / log(1+F_max)` against the **planet's biggest
+river** (`getPlanetMaxFlowKm2`, from the hi-res flow field, which `stepHR5` now keeps instead of
+discarding), so the same river has the same order in every window and at every zoom, and a window
+with no river no longer invents a "major" one by normalising against itself.
+
+- **Routing** (`routeFlow` in `regional-drainage.js`): D8 on a padded copy of the elevation after
+  priority-flood depression filling with epsilon (Barnes et al. 2014). Pad cells are *sinks* where
+  water may leave and *walls* elsewhere; sea cells are always outlets. Every drop therefore reaches
+  an outlet instead of dying in a noise pit. Before this, 44,000 km² injected at a window's border
+  produced a largest cell of 1,200 km²; now the largest cell carries 23,000 of 22,850 injected.
+  The real elevation is untouched, so pits still make ponds.
+- **Regional border crossings**: along each edge the hi-res flow field is sampled; per hi-res
+  cell the edge crosses there is at most one inflow crossing and one exit gap, both at the argmax
+  of flow × |crossing component|, 5 cells wide. Inflow amounts are sampled half a hi-res cell
+  outside the window so a window never counts its own accumulation. The neighbouring window
+  samples the same field at the same positions and picks the same gap from the other side.
+- **Tile chunks**: each neighbouring regional cell whose D8 outflow points at the chunk's cell
+  hands over its flow at a crossing chosen by a symmetric hash of the two cells' world
+  coordinates; the chunk's only exit gap is on the side its cell drains toward. Tile stream order
+  uses the same planet-wide normalisation, so a chunk with no inflow shows rills at most.
+- **Ponds** at tile scale now require the depression to reach the inherited regional water table.
+
+| seed 5 | before | after |
+|---|---|---|
+| river tiles (stream order ≥ 3) in the dry mid-slope grass cell | 686 | **0** |
+| standing-water tiles there | 1,095 (channels + ponds) | 1,273 (ponds only; see below) |
+| largest regional flow vs flow injected at the border (window on the biggest river) | 1,222 vs 44,378 km² | **23,258 vs 22,853 km²** |
+| river cells (order ≥ 3) in that window | 0 with planet-wide normalisation | 779 |
+| where the river leaves one window vs enters the next | undefined (each window started from zero) | same 5-cell gap; exits meet the neighbour's river within ±10 cells |
+| regional generation | 0.6–0.8 s | 0.7–0.9 s (routing adds ~0.1 s) |
+
+Known limits, in order of visibility:
+- **Corridors.** Water reaching a border wall runs along it to the gap, so a river can hug a
+  window edge for a few kilometres before turning in. The crossing is right; the approach is a
+  wall artefact. A softer wall (let border cells drain wherever the neighbour's hi-res elevation
+  is lower) would remove it.
+- **Ponds.** 1,273 standing-water tiles remain in the dry grass cell because its inherited water
+  table (0.18–0.5 m below the surface after the ridge adjustment) is shallower than the tile
+  basins' 0.3 m fill tolerance. Either the regional ridge WTD is too shallow or the tile basin
+  tolerance is too generous; the numbers now live in the same unit, so this is a tuning question.
+- **Hi-res rivers are short.** `stepHR5` still routes without depression filling, so the hi-res
+  field the whole scheme is anchored to fragments into short reaches; the biggest "river" on seed
+  5 drains about 35 hi-res cells. On an archipelago catchments are small anyway, and changing the
+  hi-res layer would change the planet overlays the person anchors on, so it was left alone.
+  Applying `routeFlow` there is a one-line change when wanted.
 
 ## Appendix A — Dead code inventory (deleted in B2; kept as the record of what was there)
 

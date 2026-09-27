@@ -317,7 +317,9 @@ function stepHR4_waterTableRow(hy) {
 
 // ── Step HR5: drainage (flow accumulation + stream order) ──
 async function stepHR5_drainage() {
-  const flowAccum = new Float32Array(state.HR_TOTAL);
+  // Kept in hiResData (hi-res cell·precip units): the regional layer injects it
+  // along its window border so rivers continue across regions (B4).
+  const flowAccum = state.hiResData.flowAccum;
   const streamOrder = state.hiResData.streamOrder;
 
   updateProgress('Preparing drainage…', 52);
@@ -645,6 +647,7 @@ async function generateHighResSurface(seed) {
       terrainType:     new Uint8Array(state.HR_TOTAL),
       coverType:       new Uint8Array(state.HR_TOTAL),
       streamOrder:     new Uint8Array(state.HR_TOTAL),
+      flowAccum:       new Float32Array(state.HR_TOTAL),   // D8 upstream accumulation (land only)
 
       // Precomputed drain direction (wide-window gradient, for regional gen)
       drainDirX:       new Float32Array(state.HR_TOTAL),

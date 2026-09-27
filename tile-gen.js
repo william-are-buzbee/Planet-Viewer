@@ -12,9 +12,10 @@ import {
   CT_NONE, CT_FOREST, CT_MUSHFOREST, CT_SPARSE_FOREST, CT_SPARSE_MUSHFOREST
 } from './terrain-derive.js';
 import { computeTilePalette, tilePhysical } from './palette-compute.js';
-import { REGIONAL_SIZE } from './regional-gen.js';
-import { TILES_PER_REGIONAL_CELL } from './regional-constants.js';
-import { ZONE_NAMES } from './regional-grid.js';
+import { REGIONAL_SIZE, getPlanetMaxFlowKm2 } from './regional-gen.js';
+import { TILES_PER_REGIONAL_CELL, TILE_M } from './regional-constants.js';
+import { ZONE_NAMES, D8X, D8Y } from './regional-grid.js';
+import { streamOrderFromFlow, RUNOFF_FLOOR, routeFlow } from './regional-drainage.js';
 import { renderRegionalMap, renderTileDetail } from './regional-render.js';
 
 // One chunk covers exactly one regional cell (≈152 m) → ≈1.19 m per tile.
@@ -260,60 +261,88 @@ function generateTileTopography(context) {
   return out;
 }
 
-// ── T3: Tile drainage (D8 flow accumulation + stream order) ──
-function computeTileDrainage(tileElevation, tilePrecip, Wt, Ht) {
-  const N = Wt * Ht;
-  const streamOrder = new Uint8Array(N);
-  const flow = new Float32Array(N);
-
-  // Collect land indices
-  let landCount = 0;
-  for (let i = 0; i < N; i++) {
-    if (tileElevation[i] > 0) {
-      flow[i] = (tilePrecip[i] || 0) + 0.02;
-      landCount++;
+// ── T2.5: water entering this chunk from the regional cells that drain into it ──
+//    Each neighbouring regional cell whose D8 outflow points at (rx, ry) hands its
+//    whole accumulated flow (km²·precip) across the shared edge, spread along the
+//    chunk's border tiles on that side (a corner neighbour hands it to the corner
+//    tile). The tile D8 then gathers it into the chunk's own channel, so a regional
+//    river runs through the chunk instead of the chunk inventing its own.
+function tileInflowFromRegion(rx, ry) {
+  const g = state.regionalCells;
+  const ci = g.idx(rx, ry);
+  const inflow = new Float32Array(CHUNK_TOTAL);
+  const padSink = { W: new Uint8Array(CHUNK_H), E: new Uint8Array(CHUNK_H), N: new Uint8Array(CHUNK_W), S: new Uint8Array(CHUNK_W) };
+  const GAP = 2;
+  // Where along a shared edge a channel crosses: a hash of the two cells' world
+  // coordinates (symmetric, so both chunks agree), kept away from the corners.
+  const crossingAt = (ia, ib) => {
+    const h = hashInt(g.wx(ia) + g.wx(ib), g.wy(ia) + g.wy(ib), state.seed | 0);
+    return Math.round((0.25 + 0.5 * h) * (CHUNK_W - 1));
+  };
+  const openGap = (arr, at) => { for (let j = Math.max(0, at - GAP); j <= Math.min(arr.length - 1, at + GAP); j++) arr[j] = 1; };
+  const inject = (dx, dy, at, F) => {
+    // dx,dy: direction of the neighbour; put F on the border tiles facing it
+    const cells = [];
+    if (dx !== 0 && dy !== 0) {
+      cells.push((dy < 0 ? 0 : CHUNK_H - 1) * CHUNK_W + (dx < 0 ? 0 : CHUNK_W - 1));
+    } else if (dx !== 0) {
+      const tx = dx < 0 ? 0 : CHUNK_W - 1;
+      for (let ty = Math.max(0, at - GAP); ty <= Math.min(CHUNK_H - 1, at + GAP); ty++) cells.push(ty * CHUNK_W + tx);
     } else {
-      flow[i] = 0;
+      const ty = dy < 0 ? 0 : CHUNK_H - 1;
+      for (let tx = Math.max(0, at - GAP); tx <= Math.min(CHUNK_W - 1, at + GAP); tx++) cells.push(ty * CHUNK_W + tx);
     }
+    for (const c of cells) inflow[c] += F / cells.length;
+  };
+
+  // Inflow: every neighbour whose D8 outflow points at this cell hands over its flow
+  for (let d = 0; d < 8; d++) {
+    const nx = rx + D8X[d], ny = ry + D8Y[d];
+    if (!g.inBounds(nx, ny)) continue;
+    const ni = g.idx(nx, ny);
+    if (!g.isLand[ni]) continue;
+    const fd = g.flowDir[ni];
+    if (fd === 255 || D8X[fd] !== -D8X[d] || D8Y[fd] !== -D8Y[d]) continue;
+    const F = g.flowAccum[ni];
+    if (F > 0) inject(D8X[d], D8Y[d], crossingAt(ci, ni), F);
   }
 
-  const landIdx = new Int32Array(landCount);
-  let k = 0;
+  // Outflow: one gap on the side this cell drains toward (all sides if none)
+  const fdOut = g.flowDir[ci];
+  if (fdOut === 255 || !g.inBounds(rx + D8X[fdOut], ry + D8Y[fdOut])) {
+    padSink.W.fill(1); padSink.E.fill(1); padSink.N.fill(1); padSink.S.fill(1);
+  } else {
+    const ox = D8X[fdOut], oy = D8Y[fdOut];
+    const at = crossingAt(ci, g.idx(rx + ox, ry + oy));
+    if (ox !== 0 && oy !== 0) {
+      // corner exit: open the two pad cells meeting at that corner
+      if (ox < 0) padSink.W[oy < 0 ? 0 : CHUNK_H - 1] = 1; else padSink.E[oy < 0 ? 0 : CHUNK_H - 1] = 1;
+      if (oy < 0) padSink.N[ox < 0 ? 0 : CHUNK_W - 1] = 1; else padSink.S[ox < 0 ? 0 : CHUNK_W - 1] = 1;
+    } else if (ox < 0) openGap(padSink.W, at);
+    else if (ox > 0) openGap(padSink.E, at);
+    else if (oy < 0) openGap(padSink.N, at);
+    else openGap(padSink.S, at);
+  }
+  return { inflow, padSink };
+}
+
+// ── T3: Tile drainage (D8 flow accumulation + stream order) ──
+//    Flow in km²·precip like the regional and hi-res layers; stream order is
+//    normalised against the planet's biggest river (streamOrderFromFlow), so a
+//    chunk with no inflow shows rills at most, never a river of its own.
+function computeTileDrainage(tileElevation, tilePrecip, Wt, Ht, inflow, padSink, maxFlowKm2) {
+  const N = Wt * Ht;
+  const tileAreaKm2 = (TILE_M / 1000) * (TILE_M / 1000);
+  const init = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    if (tileElevation[i] > 0) landIdx[k++] = i;
+    init[i] = tileElevation[i] > 0 ? Math.max(tilePrecip[i] || 0, RUNOFF_FLOOR) * tileAreaKm2 + (inflow ? inflow[i] : 0) : 0;
   }
-  // Process high → low
-  const sorted = Array.prototype.slice.call(landIdx);
-  sorted.sort((a, b) => tileElevation[b] - tileElevation[a]);
-
-  const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
-  const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
-
-  for (let s = 0; s < sorted.length; s++) {
-    const i = sorted[s];
-    const tx = i % Wt, ty = (i / Wt) | 0;
-    const e = tileElevation[i];
-    let lowest = -1, lowestElev = e;
-    for (let d = 0; d < 8; d++) {
-      const nx = tx + dx8[d], ny = ty + dy8[d];
-      if (nx < 0 || nx >= Wt || ny < 0 || ny >= Ht) continue;
-      const ni = ny * Wt + nx;
-      if (tileElevation[ni] < lowestElev) { lowestElev = tileElevation[ni]; lowest = ni; }
-    }
-    if (lowest >= 0) flow[lowest] += flow[i];
-  }
-
-  const avgP = tilePrecip[0] || 0.01;
-  const t1 = 1.5 / (1 + avgP * 8);
-  const t2 = t1 * 6;
-  const t3 = t1 * 25;
-
+  // Route on the padded, depression-filled surface (pits stay in tileElevation for ponds)
+  const { flow } = routeFlow(tileElevation, Wt, init, padSink);
+  const streamOrder = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
-    if (tileElevation[i] <= 0) { streamOrder[i] = 0; continue; }
-    const f = flow[i];
-    streamOrder[i] = f > t3 ? 3 : f > t2 ? 2 : f > t1 ? 1 : 0;
+    streamOrder[i] = tileElevation[i] <= 0 ? 0 : streamOrderFromFlow(flow[i], maxFlowKm2);
   }
-
   return { streamOrder, flowAccum: flow };
 }
 
@@ -431,6 +460,9 @@ function computeTileWaterBodies(tileElevation, streamOrder, context, zone) {
     if (maxDepth < MIN_BASIN_DEPTH) continue;
     // Dry-zone check: basins on arid upper slopes with deep water tables stay empty
     if (centerSat < 0.4 && (zone === 'upper_slope' || zone === 'summit')) continue;
+    // A depression only holds water if it reaches the (inherited regional) water
+    // table: the pond floor must sit at or below WTD metres under the surface.
+    if (context.wtdRegional && context.wtdRegional[i] > maxDepth) continue;
 
     // Mark basin tiles as water
     const bid = nextBasin++;
@@ -781,7 +813,9 @@ function generateTileDetail(rx, ry) {
   const tileElevation = generateTileTopography(context);
 
   // T3: drainage
-  const drainage = computeTileDrainage(tileElevation, context.precipitation, CHUNK_W, CHUNK_H);
+  const regionalInflow = tileInflowFromRegion(rx, ry);
+  const drainage = computeTileDrainage(tileElevation, context.precipitation, CHUNK_W, CHUNK_H,
+                                       regionalInflow.inflow, regionalInflow.padSink, getPlanetMaxFlowKm2());
   const streamOrder = drainage.streamOrder;
 
   // T3.5: Water body detection (coherent spatial features, not per-tile noise)
