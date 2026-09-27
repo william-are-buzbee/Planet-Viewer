@@ -24,7 +24,7 @@ export { REGIONAL_SIZE, CELLS_PER_PLANETARY, PLANETARY_CELL_KM, REGIONAL_CELL_KM
 export function getPlanetaryCell(x, y) {
   const wx = ((Math.round(x) % W) + W) % W;
   const wy = clamp(Math.round(y), 0, H - 1);
-  return state.cells[wy * W + wx];
+  return state.cells.cell(wy * W + wx);   // named-field view (label, tools)
 }
 
 // ── Bilinear interpolation of a planetary field over fractional coords ──
@@ -45,10 +45,11 @@ export function bilinearInterpolate(x, y, accessor) {
 // ── Planet-wide max land elevation (cached per generation) ──
 let _planetMaxLandElev = null;
 export function getPlanetMaxLandElev() {
+  const P = state.cells;
   if (_planetMaxLandElev !== null) return _planetMaxLandElev;
   let m = 0.01;
   for (let i = 0; i < TOTAL; i++) {
-    if (state.cells[i].isLand && state.cells[i].elevation > m) m = state.cells[i].elevation;
+    if (P.isLand[i] && P.elevation[i] > m) m = P.elevation[i];
   }
   _planetMaxLandElev = m;
   return m;
@@ -96,6 +97,7 @@ function classifyZone(elevation, slopeMag, maxLandElev) {
 //    adding detail the high-res grid can't resolve.
 //    Requires state.hiResData (generation refuses to proceed without it).
 function generateRegionalDetail(centerX, centerY) {
+  const P = state.cells;
   const _t0 = performance.now();
   _planetMaxLandElev = null; // recompute per generation
   _planetMaxFlowKm2 = null;
@@ -473,10 +475,10 @@ function generateRegionalDetail(centerX, centerY) {
       const pwx1 = ((Math.round(px0 + 1) % W) + W) % W;
       const pwy0 = clamp(Math.round(py0), 0, H - 1);
       const pwy1 = clamp(Math.round(py0 + 1), 0, H - 1);
-      const pc00 = state.cells[pwy0 * W + pwx0];
-      const pc10 = state.cells[pwy0 * W + pwx1];
-      const pc01 = state.cells[pwy1 * W + pwx0];
-      const pc11 = state.cells[pwy1 * W + pwx1];
+      const pc00 = pwy0 * W + pwx0;
+      const pc10 = pwy0 * W + pwx1;
+      const pc01 = pwy1 * W + pwx0;
+      const pc11 = pwy1 * W + pwx1;
       const pw00 = (1 - pfx) * (1 - pfy);
       const pw10 = pfx * (1 - pfy);
       const pw01 = (1 - pfx) * pfy;
@@ -487,16 +489,16 @@ function generateRegionalDetail(centerX, centerY) {
       // weight of ocean corners and renormalise so coasts are not smeared wet.
       let lw00 = pw00, lw10 = pw10, lw01 = pw01, lw11 = pw11;
       if (elev > 0) {
-        lw00 = pc00.isLand ? pw00 : 0;
-        lw10 = pc10.isLand ? pw10 : 0;
-        lw01 = pc01.isLand ? pw01 : 0;
-        lw11 = pc11.isLand ? pw11 : 0;
+        lw00 = P.isLand[pc00] ? pw00 : 0;
+        lw10 = P.isLand[pc10] ? pw10 : 0;
+        lw01 = P.isLand[pc01] ? pw01 : 0;
+        lw11 = P.isLand[pc11] ? pw11 : 0;
         const ls = lw00 + lw10 + lw01 + lw11;
         if (ls > 0) { lw00 /= ls; lw10 /= ls; lw01 /= ls; lw11 /= ls; }
         else        { lw00 = pw00; lw10 = pw10; lw01 = pw01; lw11 = pw11; }
       }
 
-      const tempC = pc00.temperature*pw00 + pc10.temperature*pw10 + pc01.temperature*pw01 + pc11.temperature*pw11;
+      const tempC = P.temperature[pc00]*pw00 + P.temperature[pc10]*pw10 + P.temperature[pc01]*pw01 + P.temperature[pc11]*pw11;
 
       // Write the cell into the struct-of-arrays grid (elevGrid IS g.elevation)
       g.isLand[idx]         = elev > 0 ? 1 : 0;
@@ -506,7 +508,7 @@ function generateRegionalDetail(centerX, centerY) {
       g.temperature[idx]    = tempC;
       g.precipitation[idx]  = hrPrecip;
       g.groundwater[idx]    = hrGW;
-      g.waterAvailability[idx] = pc00.waterAvailability*lw00 + pc10.waterAvailability*lw10 + pc01.waterAvailability*lw01 + pc11.waterAvailability*lw11;
+      g.waterAvailability[idx] = P.waterAvailability[pc00]*lw00 + P.waterAvailability[pc10]*lw10 + P.waterAvailability[pc01]*lw01 + P.waterAvailability[pc11]*lw11;
       g.volcanism[idx]      = hrVolc;
       g.iron[idx]           = hrIron;
       g.copper[idx]         = hrCopper;

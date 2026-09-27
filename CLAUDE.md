@@ -4,7 +4,8 @@ Read this first. If the repo has an audit or design doc (a Fable audit was writt
 
 ## What this is
 
-A procedural planet generator in the browser: plate tectonics and elevation, then atmosphere, currents and hydrology, then a
+A procedural planet generator in the browser: plate tectonics and elevation, then atmosphere, currents and hydrology (all on a
+typed-array `PlanetGrid`, `state.cells`), then a
 512×512 regional window (≈78 km per planetary cell, typed arrays in `regional-grid.js`) with drainage, substrate and flora, then tiles. Plain ES modules, no
 framework, no dependencies, no build step. `index.html` loads `main.js` as a module; `state.js` holds the shared `state`
 that every other file imports (no imports of its own, no DOM), `dom.js` is the only DOM touch the simulation modules make.
@@ -18,6 +19,7 @@ tiles of ≈1.19 m covering one regional cell. The world is an archipelago on pu
 | state.js | the shared `state` object (and `state.seed`, the seed of the planet on screen) |
 | dom.js | `byId` / `setStatus`, no-ops without a document |
 | main.js | entry point, orchestration, binds the renderers' canvases |
+| planet-grid.js | the planetary grid as typed arrays (`PlanetGrid`, Float64 fields, enums for plate/boundary/flora/terrain, `cell(i)`) |
 | planet-gen.js | the planetary pipeline (steps 1–5b) |
 | planet-geology.js | plates, geo seeds, elevation, minerals |
 | planet-atmosphere.js | wind, currents, SST, precipitation, hydrology |

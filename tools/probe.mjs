@@ -42,7 +42,7 @@ async function generate(res, seed) {
   return waitStatus('Generated in');
 }
 const heapMB = () => page.evaluate(() => { if (window.gc) window.gc(); return performance.memory.usedJSHeapSize / 1048576; });
-const landFrac = () => page.evaluate(async () => { const { state } = await import('/main.js'); let n = 0; for (const c of state.cells) if (c.isLand) n++; return n / state.cells.length; });
+const landFrac = () => page.evaluate(async () => { const { state } = await import('/main.js'); let n = 0; for (const c of state.cells.all()) if (c.isLand) n++; return n / state.cells.N; });
 
 // ── 1. Planet generation time and land fraction across seeds (res ×1) ──
 for (const seed of [5, 42, 7]) {
@@ -56,7 +56,7 @@ for (const seed of [5, 42, 7]) {
 log('ELEV SCALE:', JSON.stringify(await page.evaluate(async () => {
   const { state } = await import('/main.js');
   let maxL = -1, minO = 1, sumL = 0, nL = 0;
-  for (const c of state.cells) { if (c.isLand) { nL++; sumL += c.elevation; if (c.elevation > maxL) maxL = c.elevation; } else if (c.elevation < minO) minO = c.elevation; }
+  for (const c of state.cells.all()) { if (c.isLand) { nL++; sumL += c.elevation; if (c.elevation > maxL) maxL = c.elevation; } else if (c.elevation < minO) minO = c.elevation; }
   return { maxLandElev: maxL, meanLandElev: sumL / nL, minOceanElev: minO };
 })));
 
@@ -76,7 +76,7 @@ log('OCEAN-SENTINEL BLEED (×4): stored (land-masked) vs plain bilinear recomput
       if (!hr.isLand[hi]) continue;
       nLand++;
       const lx = hx / m, x0 = Math.floor(lx), fx = lx - x0;
-      const cs = [state.cells[r0 + x0 % W], state.cells[r0 + (x0 + 1) % W], state.cells[r1 + x0 % W], state.cells[r1 + (x0 + 1) % W]];
+      const cs = [state.cells.cell(r0 + x0 % W), state.cells.cell(r0 + (x0 + 1) % W), state.cells.cell(r1 + x0 % W), state.cells.cell(r1 + (x0 + 1) % W)];
       const ws = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
       let oceanW = 0, gw = 0, wa = 0;
       for (let k = 0; k < 4; k++) { if (!cs[k].isLand) oceanW += ws[k]; gw += cs[k].groundwater * ws[k]; wa += cs[k].waterAvailability * ws[k]; }
@@ -96,7 +96,7 @@ const rg = await page.evaluate(async () => {
   const { state } = await import('/main.js');
   const { generateRegionalDetail } = await import('/regional-gen.js');
   let px = -1, py = -1;
-  for (let y = 60; y < 200 && px < 0; y++) for (let x = 0; x < 512; x++) { const c = state.cells[y * 512 + x]; if (c.isLand && c.elevation > 0.08) { px = x; py = y; break; } }
+  for (let y = 60; y < 200 && px < 0; y++) for (let x = 0; x < 512; x++) { const c = state.cells.cell(y * 512 + x); if (c.isLand && c.elevation > 0.08) { px = x; py = y; break; } }
   const t0 = performance.now(); generateRegionalDetail(px, py);
   return { px, py, ms: Math.round(performance.now() - t0) };
 });
@@ -111,7 +111,7 @@ log('RELIEF PER LAYER:', JSON.stringify(await page.evaluate(async () => {
   const { generateRegionalDetail, bilinearInterpolate } = await import('/regional-gen.js');
   const { generateTileDetail } = await import('/tile-gen.js');
   let px = -1, py = -1;
-  for (let y = 60; y < 200 && px < 0; y++) for (let x = 0; x < 512; x++) { const c = state.cells[y * 512 + x]; if (c.isLand && c.elevation > 0.08) { px = x; py = y; break; } }
+  for (let y = 60; y < 200 && px < 0; y++) for (let x = 0; x < 512; x++) { const c = state.cells.cell(y * 512 + x); if (c.isLand && c.elevation > 0.08) { px = x; py = y; break; } }
   state.selectedRegion = { cx: px, cy: py };
   generateRegionalDetail(px, py);
   let mn = 1e9, mx = -1e9, bMn = 1e9, bMx = -1e9;
@@ -167,7 +167,7 @@ async function sampleDrainDirs() {
     const { bilinearSampleHR } = await import('/core-math.js');
     const m = state.hiResMultiplier, hr = state.hiResData, out = [];
     for (let py = 20; py < 236; py += 4) for (let px = 0; px < 512; px += 4) {
-      const c = state.cells[py * 512 + px];
+      const c = state.cells.cell(py * 512 + px);
       if (!c.isLand || c.elevation < 0.02) continue;
       out.push([px, py, bilinearSampleHR(hr.drainDirX, (px + 0.5) * m, (py + 0.5) * m, state.HR_W, state.HR_H), bilinearSampleHR(hr.drainDirY, (px + 0.5) * m, (py + 0.5) * m, state.HR_W, state.HR_H)]);
     }
@@ -187,7 +187,7 @@ log('LAND MASK DISAGREEMENT:', JSON.stringify(await page.evaluate(async () => {
   const m = state.hiResMultiplier, hr = state.hiResData, HRW = state.HR_W, HRH = state.HR_H;
   let disagree = 0, land = 0;
   for (let hy = 0; hy < HRH; hy++) for (let hx = 0; hx < HRW; hx++) {
-    const c = state.cells[Math.floor(hy / m) * 512 + Math.floor(hx / m)], hi = hy * HRW + hx;
+    const c = state.cells.cell(Math.floor(hy / m) * 512 + Math.floor(hx / m)), hi = hy * HRW + hx;
     if (hr.isLand[hi]) land++; if (!!hr.isLand[hi] !== c.isLand) disagree++;
   }
   return { hiresLand: land, disagreeCells: disagree, fracOfLand: +(disagree / land).toFixed(3) };

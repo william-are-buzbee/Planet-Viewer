@@ -201,6 +201,7 @@ function render(overlay) {
 }
 
 function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
+  const P = state.cells;
   if (!state.cells) return;
   const scaleX = canvasW / W;
   const scaleY = canvasH / H;
@@ -213,7 +214,7 @@ function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
   if (mode === 'currents') {
     let sum = 0, count = 0;
     for (let i = 0; i < TOTAL; i++) {
-      if (!state.cells[i].isLand) { sum += state.cells[i].sst; count++; }
+      if (!P.isLand[i]) { sum += P.sst[i]; count++; }
     }
     if (count > 0) meanSST = sum / count;
   }
@@ -225,7 +226,7 @@ function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
       let py = (sy + 0.5) / sqrtN * H;
 
       const startIdx = Math.floor(clamp(py, 0, H-1)) * W + Math.floor(clamp(px, 0, W-1)) % W;
-      if (mode === 'currents' && state.cells[startIdx].isLand) continue;
+      if (mode === 'currents' && P.isLand[startIdx]) continue;
 
       const points = [{ x: px, y: py }];
       let validSteps = 0;
@@ -234,14 +235,14 @@ function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
         const ix = ((Math.floor(px) % W) + W) % W;
         const iy = clamp(Math.floor(py), 0, H - 1);
         const ci = iy * W + ix;
-        const c = state.cells[ci];
+        const c = ci;
 
         let u, v;
         if (mode === 'wind') {
-          u = c.windU; v = c.windV;
+          u = P.windU[c]; v = P.windV[c];
         } else {
-          if (c.isLand) break;
-          u = c.currentU; v = c.currentV;
+          if (P.isLand[c]) break;
+          u = P.currentU[c]; v = P.currentV[c];
         }
 
         const mag = Math.sqrt(u * u + v * v);
@@ -272,7 +273,7 @@ function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
 
       if (mode === 'wind') {
         const ci = Math.floor(clamp(points[0].y, 0, H-1)) * W + ((Math.floor(points[0].x) % W) + W) % W;
-        const spd = state.cells[ci].windSpeed;
+        const spd = P.windSpeed[ci];
         const alpha = clamp(0.15 + spd * 0.5, 0.15, 0.85);
         if (spd < 0.3) {
           targetCtx.strokeStyle = `rgba(120, 140, 160, ${alpha})`;
@@ -283,9 +284,9 @@ function drawStreamlines(targetCtx, mode, canvasW, canvasH) {
         }
       } else {
         const ci = Math.floor(clamp(points[0].y, 0, H-1)) * W + ((Math.floor(points[0].x) % W) + W) % W;
-        const sst = state.cells[ci].sst;
+        const sst = P.sst[ci];
         const diff = sst - meanSST;
-        const alpha = clamp(0.3 + state.cells[ci].currentSpeed * 3, 0.2, 0.85);
+        const alpha = clamp(0.3 + P.currentSpeed[ci] * 3, 0.2, 0.85);
         if (diff > 0.05) {
           const t = clamp(diff * 5, 0, 1);
           targetCtx.strokeStyle = `rgba(${200 + Math.floor(t*55)}, ${140 - Math.floor(t*60)}, ${60 - Math.floor(t*40)}, ${alpha})`;
@@ -416,6 +417,7 @@ function renderMollweide() {
 
 
 function renderGlobe() {
+  const P = state.cells;
   if (!state.cells) return;
 
   const flatCtx = ctx;
@@ -467,12 +469,12 @@ function renderGlobe() {
 
       const ci = Math.floor(ti / 2);
       const cj = Math.floor(tj / 2);
-      const elev = state.cells[cj * W + ci].elevation;
+      const elev = P.elevation[cj * W + ci];
 
       const ciR = (ci + 1) % W;
       const cjU = Math.max(0, cj - 1);
-      const elevRight = state.cells[cj * W + ciR].elevation;
-      const elevUp    = state.cells[cjU * W + ci].elevation;
+      const elevRight = P.elevation[cj * W + ciR];
+      const elevUp    = P.elevation[cjU * W + ci];
       const reliefScale = 8.0;
       const dEdx = (elevRight - elev) * reliefScale;
       const dEdy = (elevUp - elev) * reliefScale;
