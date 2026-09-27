@@ -3,124 +3,79 @@
 // ══════════════════════════════════════════════════════════════════
 
 import { noise2D, clamp } from './core-math.js';
+import { ZONE_TIDAL, ZONE_COASTAL, ZONE_LOWLAND, ZONE_MID_SLOPE, ZONE_UPPER_SLOPE, ZONE_SUMMIT } from './regional-grid.js';
 
-// ── Refine substrate/saturation/water table from the high-res base ──
+// Drainage-responsive water table adjustment (metres), indexed by zone enum.
+// Ridges shed water (WTD pushed positive), channels collect it (pushed to or
+// below the surface). Columns: streamOrder 0 (ridge), 1, 2, ≥3 (channel).
+const DRAIN_WTD = [];
+DRAIN_WTD[ZONE_SUMMIT]      = [0.55, 0.30, 0.10,  0.00];
+DRAIN_WTD[ZONE_UPPER_SLOPE] = [0.40, 0.18, 0.05,  0.00];
+DRAIN_WTD[ZONE_MID_SLOPE]   = [0.28, 0.10, 0.02, -0.01];
+DRAIN_WTD[ZONE_LOWLAND]     = [0.18, 0.06, 0.00, -0.02];
+DRAIN_WTD[ZONE_COASTAL]     = [0.06, 0.02, 0.00, -0.02];
+DRAIN_WTD[ZONE_TIDAL]       = [0.00, 0.00, 0.00, -0.03];
+
+// Break bilinear-interpolation contours: the hi-res grid provides only ~4
+// samples across the regional view, so threshold crossings would otherwise be
+// grid-aligned straight lines. Small world-coordinate noise makes them organic.
+const PRECIP_NOISE_SEED = 0xA1B2, GW_NOISE_SEED = 0xC3D4;
+const NOISE_FREQ = 0.015;      // ~65-cell wavelength (~10 km)
+const PRECIP_NOISE_AMP = 0.06, GW_NOISE_AMP = 0.04;
+
+// ── Refine substrate / saturation / water table from the high-res base ──
 //    The high-res values are the starting point; drainage structure (resolved
-//    only at regional resolution) pushes channels wetter and finer. Ridge
-//    cells (streamOrder 0) are left exactly at their high-res base.
-function refineRegionalSubstrateFromHiRes(cell) {
-  // Start from the interpolated high-res base
-  cell.grainSize = cell._hrGrainSize;
-  cell.saturation = cell._hrSaturation;
-  cell.waterTableDepth = cell._hrWaterTableDepth;
+//    only at regional resolution) pushes channels wetter and finer. Ridge cells
+//    (streamOrder 0) keep their high-res base exactly.
+function refineRegionalSubstrateFromHiRes(g, i) {
+  let grain = g.hrGrainSize[i];
+  let wtd = g.hrWaterTableDepth[i];
 
-  if (!cell.isLand) {
-    cell.saturation = 1.0;
-    cell.baseGrainSize = cell.grainSize;
+  if (!g.isLand[i]) {
+    g.grainSize[i] = grain;
+    g.saturation[i] = 1.0;
+    g.waterTableDepth[i] = wtd;
     return;
   }
 
-  // ── Break bilinear interpolation contours ──
-  // The hi-res grid provides only ~4 data points across the regional view.
-  // Without noise, threshold crossings (canopy 0.45, cover type transitions)
-  // produce grid-aligned straight-line boundaries. Small world-coordinate
-  // noise makes these boundaries follow organic contours.
-  const precipNoiseSeed = 0xA1B2;
-  const gwNoiseSeed = 0xC3D4;
-  const noiseFreq = 0.015;   // ~65-cell wavelength (~10 km)
-  const precipNoiseAmp = 0.06;
-  const gwNoiseAmp = 0.04;
+  const wx = g.wx(i), wy = g.wy(i);
+  const precip = clamp(g.precipitation[i] + noise2D(wx * NOISE_FREQ, wy * NOISE_FREQ, PRECIP_NOISE_SEED) * PRECIP_NOISE_AMP, 0, 1);
+  const gw     = clamp(g.groundwater[i]   + noise2D(wx * NOISE_FREQ, wy * NOISE_FREQ, GW_NOISE_SEED) * GW_NOISE_AMP, 0, 1);
+  g.precipitation[i] = precip;
+  g.groundwater[i] = gw;
 
-  cell.precipitation += noise2D(cell.worldX * noiseFreq, cell.worldY * noiseFreq, precipNoiseSeed) * precipNoiseAmp;
-  cell.precipitation = clamp(cell.precipitation, 0, 1);
+  const so = g.streamOrder[i];
+  const zone = g.zone[i];
+  const dp = DRAIN_WTD[zone] || DRAIN_WTD[ZONE_LOWLAND];
+  wtd += dp[so >= 3 ? 3 : so];
 
-  cell.groundwater += noise2D(cell.worldX * noiseFreq, cell.worldY * noiseFreq, gwNoiseSeed) * gwNoiseAmp;
-  cell.groundwater = clamp(cell.groundwater, 0, 1);
-
-  const so = cell.streamOrder;
-
-  // ── Drainage-responsive water table modulation ──
-  // The hi-res base WTD is 0.00 for most lowland continental cells.
-  // Drainage creates differentiation: ridges shed water (WTD pushed positive),
-  // channels collect water (WTD pushed negative/zero).
-  const drainParams = {
-    summit:      { ridge: 0.55, so1: 0.30, so2: 0.10, channel: 0.00 },
-    upper_slope: { ridge: 0.40, so1: 0.18, so2: 0.05, channel: 0.00 },
-    mid_slope:   { ridge: 0.28, so1: 0.10, so2: 0.02, channel: -0.01 },
-    lowland:     { ridge: 0.18, so1: 0.06, so2: 0.00, channel: -0.02 },
-    coastal:     { ridge: 0.06, so1: 0.02, so2: 0.00, channel: -0.02 },
-    tidal:       { ridge: 0.00, so1: 0.00, so2: 0.00, channel: -0.03 },
-  };
-
-  const dp = drainParams[cell.zone] || drainParams.lowland;
-  let wtdAdjust;
-  if (so === 0) {
-    wtdAdjust = dp.ridge;
-  } else if (so === 1) {
-    wtdAdjust = dp.so1;
-  } else if (so === 2) {
-    wtdAdjust = dp.so2;
-  } else {
-    wtdAdjust = dp.channel;  // negative = water table above surface
+  // Wetness-dependent extra push for channels, tiered by stream order; tidal
+  // and coastal cells get a coastal push whatever their order.
+  const isTidal = zone === ZONE_TIDAL || zone === ZONE_COASTAL;
+  if (so >= 2 || isTidal) {
+    const waterSupply = Math.min(1, precip * 0.4 + gw * 0.35 + g.hrSaturation[i] * 0.25);
+    let push = 0;
+    if (so >= 4)      push = waterSupply * 0.22;   // rivers: full flooded-forest transition
+    else if (so >= 3) push = waterSupply * 0.14;   // streams: visible wet zone
+    else if (so >= 2) push = waterSupply * 0.05;   // rills: damp ground
+    if (isTidal)      push += waterSupply * 0.08;  // water table near sea level at the coast
+    wtd -= push;
   }
+  g.waterTableDepth[i] = wtd;
 
-  cell.waterTableDepth = cell._hrWaterTableDepth + wtdAdjust;
-
-  // ── Wetness-dependent additional push for channels (tiered by stream order) ──
-  // The hi-res base WTD is ~0.05–0.07 even in wet lowlands, so the
-  // structural drainParams adjustment alone (-0.02 to -0.03) doesn't
-  // push WTD below zero. In areas with high water supply, channels
-  // should have water table at or above the surface. Scale additional
-  // push by local water supply so dry channels stay dry.
-  if (so >= 2) {
-    const waterSupply = Math.min(1,
-      cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
-    let wtdPush;
-    if (so >= 4) {
-      // Major drainage — rivers. Full flooded forest transition.
-      wtdPush = waterSupply * 0.22;
-    } else if (so >= 3) {
-      // Minor channels — streams. Visible wet zone, some shallow water.
-      wtdPush = waterSupply * 0.14;
-    } else {
-      // SO 2 rills — damp ground, barely perceptible water.
-      wtdPush = waterSupply * 0.05;
-    }
-    // Tidal zones: coastal proximity pushes WTD toward zero/negative.
-    // Water table is near sea level at the coast. Stacks with stream order push.
-    const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
-    if (isTidal) {
-      wtdPush += waterSupply * 0.08;
-    }
-    cell.waterTableDepth -= wtdPush;
-  } else {
-    // SO 0-1: still apply tidal push even without channel flow
-    const isTidal = (cell.zone === 'tidal' || cell.zone === 'coastal');
-    if (isTidal) {
-      const waterSupply = Math.min(1,
-        cell.precipitation * 0.4 + (cell.groundwater || 0) * 0.35 + cell._hrSaturation * 0.25);
-      cell.waterTableDepth -= waterSupply * 0.08;
-    }
-  }
-
-  // Recompute saturation from the drainage-modulated WTD
-  // (same capillary fringe model as stepHR4_waterTableRow)
-  const capillary = (1.0 - cell.grainSize) * 0.15;
-  const effDepth = cell.waterTableDepth - capillary;
-  cell.saturation = effDepth <= 0
+  // Saturation from the drainage-modulated WTD (same capillary-fringe model as
+  // stepHR4_waterTableRow)
+  const capillary = (1.0 - grain) * 0.15;
+  const effDepth = wtd - capillary;
+  const sat = effDepth <= 0
     ? Math.min(1, Math.max(0.7, 1.0 - effDepth * 0.5))
     : Math.min(0.7, Math.exp(-effDepth * 8.0));
-
-  cell.saturation = clamp(cell.saturation, 0, 1);
+  g.saturation[i] = clamp(sat, 0, 1);
 
   // Channels deposit finer sediment than the ridges around them.
-  if (so >= 2) {
-    cell.grainSize = Math.min(cell.grainSize, 0.2);
-  } else if (so >= 1) {
-    cell.grainSize = Math.min(cell.grainSize, cell.grainSize * 0.8 + 0.05);
-  }
-  cell.grainSize = clamp(cell.grainSize, 0.05, 1.0);
-  cell.baseGrainSize = cell.grainSize;
+  if (so >= 2)      grain = Math.min(grain, 0.2);
+  else if (so >= 1) grain = Math.min(grain, grain * 0.8 + 0.05);
+  g.grainSize[i] = clamp(grain, 0.05, 1.0);
 }
 
 export { refineRegionalSubstrateFromHiRes };

@@ -30,7 +30,7 @@ import {
 // ── Region Cache — stores recent regional grids for instant revisit ──
 // ══════════════════════════════════════════════════════════════════
 const regionCache = new Map();
-const MAX_CACHE_SIZE = 2;
+const MAX_CACHE_SIZE = 4;   // ~40 MB per region since the struct-of-arrays grid
 
 function regionCacheKey(cx, cy) {
   // Round to avoid floating-point key mismatches
@@ -451,8 +451,8 @@ function captureSnapshot() {
 
   if (state.regionalCells && lastRegionalCoord) {
     const { rx, ry } = lastRegionalCoord;
-    if (state.regionalCells[rx] && state.regionalCells[rx][ry]) {
-      const rc = state.regionalCells[rx][ry];
+    if (state.regionalCells.inBounds(rx, ry)) {
+      const rc = state.regionalCells.cell(rx, ry);
       const rZone = rc.zone || '—';
       const rPlate = rc.plateType || pPlateType;
       const rMinerals = rc.minerals || {};
@@ -877,7 +877,7 @@ export function initUI(runGeneration) {
           if (cached) {
             state.currentTileData = cached;
             renderTileDetail(document.getElementById('tileOverlaySelect').value);
-            const rc = state.regionalCells[trx][tryy];
+            const rc = state.regionalCells.cell(trx, tryy);
             document.getElementById('tileDetailTitle').textContent =
               `TILES: (${trx}, ${tryy}) — ${rc.zone} ${rc.terrainType || ''}`;
             statusText.textContent = 'Tile loaded from cache';
@@ -886,7 +886,7 @@ export function initUI(runGeneration) {
             generateTileDetail(trx, tryy);
             const tt1 = performance.now();
             renderTileDetail(document.getElementById('tileOverlaySelect').value);
-            const rc = state.regionalCells[trx][tryy];
+            const rc = state.regionalCells.cell(trx, tryy);
             document.getElementById('tileDetailTitle').textContent =
               `TILES: (${trx}, ${tryy}) — ${rc.zone} ${rc.terrainType || ''}`;
             statusText.textContent = `Tile panned in ${(tt1 - tt0).toFixed(0)} ms`;

@@ -62,7 +62,7 @@ re-implemented per layer.
 |---|---|---|---|---|
 | Planetary | 512×256 | whole planet (≈40,000 km circumference) | ≈78 km | 131k JS objects, ~45 props each |
 | Hi-res | 512m×256m (m = 1,2,4,8) | whole planet | 78 / 39 / 19.5 / 9.75 km | typed arrays, ~101 B/cell (≈212 MB at ×4, ≈850 MB at ×8) |
-| Regional | 512×512 | **one** planetary cell (78 km) | ≈152 m | 262k JS objects, 59 props each ≈ **221 MB per region** |
+| Regional | 512×512 | **one** planetary cell (78 km) | ≈152 m | ~~262k JS objects ≈ 221 MB~~ **typed arrays, 36.8 MB per region** (since B3) |
 | Tile | ~~512×512~~ **128×128** (since B5) | one regional cell (152 m) | ~~0.30 m~~ **≈1.19 m** | typed arrays, ~1 MB per chunk |
 
 Two things stand out immediately:
@@ -436,6 +436,33 @@ regional cell; the archipelago land fraction stays.
 Still open from this table: tile-scale hydrology (6.7 % standing water in a dry cell) is computed
 on the tile's own micro-relief with no inflow from the regional drainage; that is B4's territory,
 now with sane units to work in.
+
+## 9. B3 — applied (regional grid as typed arrays)
+
+`regional-grid.js` holds the regional window as struct-of-arrays: one `Float32Array` or
+`Uint8Array` per field, row-major like `hiResData` and the tile chunk, with `zone`, `floraType`,
+`terrainType` and `coverType` as enums. The per-cell passes (`regional-substrate.js`,
+`regional-flora.js`, `regional-drainage.js`, terrain derivation) take `(grid, i)`; the renderers
+and the tile sampler index the arrays directly; the snapshot panel, tile titles and the tools use
+`grid.cell(rx, ry)`, which materialises the old named-field object on demand. Eight fields nothing
+read (`atmosphericMoisture`, `windSpeed`, `sst`, `windU/V`, `current*`, planetary `drainage`,
+`dominant`, `baseGrainSize`, the unused hi-res canopy/organic copies) are gone, as is the
+fitness-confidence console dump. The region cache is back up to 4 entries.
+
+| seed 5 | before | after |
+|---|---|---|
+| One regional window | 221 MB of objects | **36.8 MB** of typed arrays |
+| Regional generation (browser / Node) | 2.3 s / 4.6 s | **0.8 s / 0.6 s** |
+| Arrow-key pan | 3.0 s | **0.64 s** |
+| Heap after one pan | 557 MB | **184 MB** |
+| Regional relief in the 78 km window | 344.7 m | 344.7 m (identical) |
+| Tile relief inside one regional cell | 4.4 m | 4.43 m |
+| Standing-water / stream-order-3 tiles in the same dry grass cell | 1,095 / 686 | 696 / 716 |
+
+The last row moved because regional fields are now `float32`; the tile layer's basin detection
+looks for strict local minima on an almost flat bilinear surface and flips on last-bit
+differences. That fragility is the tile hydrology B4 already owns, not a regression in the
+regional layer, whose outputs are unchanged to four decimals.
 
 ## Appendix A — Dead code inventory (deleted in B2; kept as the record of what was there)
 

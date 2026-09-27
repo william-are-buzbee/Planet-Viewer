@@ -99,35 +99,35 @@ generateRegionalDetail(px + 0.5, py + 0.5);
 console.log = realLog;
 say(`regional ${REGIONAL_SIZE}²  ${(performance.now() - t0).toFixed(0)} ms`);
 const rc = state.regionalCells;
-check(rc && rc.length === REGIONAL_SIZE && rc[0].length === REGIONAL_SIZE, 'regional grid populated');
-let rLand = 0, rNaN = 0, rWater = 0;
-for (let rx = 0; rx < REGIONAL_SIZE; rx += 3) for (let ry = 0; ry < REGIONAL_SIZE; ry += 3) {
-  const c = rc[rx][ry];
-  if (c.isLand) rLand++;
-  if (c.elevation !== c.elevation || c.saturation !== c.saturation) rNaN++;
-  if (c.hasWater) rWater++;
-}
-check(rNaN === 0, 'no NaN in regional elevation / saturation');
-let rMaxElev = -Infinity, rSpanMin = Infinity;
-for (let rx = 0; rx < REGIONAL_SIZE; rx += 3) for (let ry = 0; ry < REGIONAL_SIZE; ry += 3) { const e = rc[rx][ry].elevation; if (e > rMaxElev) rMaxElev = e; if (e < rSpanMin) rSpanMin = e; }
+check(rc && rc.S === REGIONAL_SIZE && rc.elevation.length === REGIONAL_SIZE * REGIONAL_SIZE, 'regional grid populated (struct-of-arrays)');
+check(!hasNaN(rc.elevation) && !hasNaN(rc.saturation) && !hasNaN(rc.waterTableDepth), 'no NaN in regional elevation / saturation / WTD');
+let rLand = 0, rMaxElev = -Infinity;
+for (let i = 0; i < rc.N; i++) { if (rc.isLand[i]) rLand++; if (rc.elevation[i] > rMaxElev) rMaxElev = rc.elevation[i]; }
 check(rMaxElev > 1 && rMaxElev < 12000, `regional elevation is in metres (max ${rMaxElev.toFixed(0)} m in this window)`);
 check(rLand > 0, 'regional window contains land');
-const centre = rc[REGIONAL_SIZE / 2][REGIONAL_SIZE / 2];
+const centre = rc.cell(REGIONAL_SIZE / 2, REGIONAL_SIZE / 2);
 check(Math.abs(centre.worldX / REGIONAL_SIZE - (px + 0.5)) < 1e-3, 'regional window is centred on the requested point (A3)');
+check(typeof centre.zone === 'string' && typeof centre.terrainType === 'string', 'cell(rx, ry) materialises named fields');
+{
+  // Memory: 512² cells of typed arrays should be a few tens of MB, not hundreds
+  let bytes = 0;
+  for (const k of Object.keys(rc)) if (ArrayBuffer.isView(rc[k])) bytes += rc[k].byteLength;
+  check(bytes < 60 * 1024 * 1024, `regional grid is ${(bytes / 1048576).toFixed(1)} MB of typed arrays (B3)`);
+}
 
 // Determinism: the same window twice must be bit-identical
-const before = Float32Array.from({ length: 64 }, (_, i) => rc[i * 8][i * 8].elevation);
+const before = Float32Array.from({ length: 64 }, (_, i) => rc.elevation[rc.idx(i * 8, i * 8)]);
 console.log = () => {};
 generateRegionalDetail(px + 0.5, py + 0.5);
 console.log = realLog;
-const after = Float32Array.from({ length: 64 }, (_, i) => state.regionalCells[i * 8][i * 8].elevation);
+const after = Float32Array.from({ length: 64 }, (_, i) => state.regionalCells.elevation[state.regionalCells.idx(i * 8, i * 8)]);
 check(before.every((v, i) => v === after[i]), 'regional generation is deterministic for a fixed seed');
 
 // Tile chunk on a land regional cell near the middle
 let rx = -1, ry = -1;
 for (let r = 0; r < 200 && rx < 0; r++) for (let a = 0; a < 8; a++) {
   const x = 256 + Math.round(r * Math.cos(a)), y = 256 + Math.round(r * Math.sin(a));
-  const c = state.regionalCells[x] && state.regionalCells[x][y];
+  const c = state.regionalCells.cell(x, y);
   if (c && c.isLand) { rx = x; ry = y; break; }
 }
 check(rx >= 0, `found a land regional cell for the tile test (${rx}, ${ry})`);
