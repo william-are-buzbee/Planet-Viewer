@@ -1,5 +1,9 @@
 # CLAUDE.md — Planet-Viewer
 
+**This repository is frozen (7 Nov 2026).** Planet-Viewer moved to the Game-Template-and-Library repository, at
+`labs/planet-viewer`, with this repository's history. Do not work here: open that repository and read its `CLAUDE.md` and
+`labs/planet-viewer/CLAUDE.md`. Nothing below is kept current.
+
 Read this first. If the repo has an audit or design doc (a Fable audit was written 26 Sep 2026), read it before changing the code it covers.
 
 ## What this is
