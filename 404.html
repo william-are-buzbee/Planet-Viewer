@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Moved</title>
+<script>
+// This moved on 7 Nov 2026. Every address under /Planet-Viewer/ goes to the same place under https://william-are-buzbee.github.io/Game-Template-and-Library/labs/planet-viewer/, its query and hash kept.
+(function(){
+  var old='/Planet-Viewer/'.toLowerCase(),p=location.pathname,i=p.toLowerCase().indexOf(old);
+  var rest=i>=0?p.slice(i+old.length):'';
+  if(rest==='index.html')rest='';
+  location.replace('https://william-are-buzbee.github.io/Game-Template-and-Library/labs/planet-viewer/'+rest+location.search+location.hash);
+})();
+</script>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:15vh auto;padding:0 16px;background:#fff;color:#111}@media (prefers-color-scheme:dark){body{background:#141413;color:#ecebe7}a{color:#8db4ff}}</style>
+</head>
+<body>
+<p>This has moved to <a href="https://william-are-buzbee.github.io/Game-Template-and-Library/labs/planet-viewer/">https://william-are-buzbee.github.io/Game-Template-and-Library/labs/planet-viewer/</a>.</p>
+</body>
+</html>
